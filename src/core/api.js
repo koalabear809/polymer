@@ -22,6 +22,7 @@ import * as terminal from '../terminal/term.js';
 import * as themes from '../themes/themes.js';
 import * as persp from '../persp/persp.js';
 import * as git from '../git/git.js';
+import * as agent from '../agent/agent.js';
 import * as vimEx from '../vim/ex.js';
 import * as vimRegisters from '../vim/registers.js';
 
@@ -156,6 +157,12 @@ export const api = {
   runGit: git.runGit,
   gitRepoRoot: git.repoRoot,
   runProcess: (program, args = [], opts = {}) => host.invoke('run_process', { options: { program, args, ...opts } }),
+
+  // agents
+  defineAgent: agent.defineAgent,
+  openAgent: agent.openAgent,
+  agentSend: agent.agentSend,
+  addAgentMcpProvider: agent.addAgentMcpProvider,
 
   // terminals
   openTerminal: terminal.openTerminal,

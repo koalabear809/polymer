@@ -30,6 +30,7 @@ export class Buffer {
     this.keymap = null;          // optional buffer-local keymap name
     this.state = 'normal';       // vim state
     this.readOnly = false;
+    this.readOnlyBefore = null;  // Marker: text before it is read-only (comint-style input areas)
     this.modified = false;
     this.file = null;            // visited file path
     this.fileInfo = null;        // { crlf, mtimeMs }
@@ -45,17 +46,19 @@ export class Buffer {
 
   // ----- editing
 
-  checkWritable(opts) {
-    if (this.readOnly && !opts?.inhibitReadOnly && !runtimeInhibitReadOnly()) {
-      throw new PolymerError('buffer-read-only', `Buffer is read-only: ${this.name}`);
+  checkWritable(opts, pos) {
+    if (opts?.inhibitReadOnly || runtimeInhibitReadOnly()) return;
+    if (this.readOnly) throw new PolymerError('buffer-read-only', `Buffer is read-only: ${this.name}`);
+    if (pos !== undefined && this.readOnlyBefore?.buffer && pos < this.readOnlyBefore.pos) {
+      throw new PolymerError('text-read-only', 'Text is read-only');
     }
   }
 
   /** Insert `str` at `offset`. Options: { inhibitReadOnly, undo: true }. */
   insertText(offset, str, opts = {}) {
     if (!str) return offset;
-    this.checkWritable(opts);
     offset = this.text.clamp(offset);
+    this.checkWritable(opts, offset);
     runHooks('before-change-functions', this, offset, offset);
     this.text.insert(offset, str);
     adjustMarkersForInsert(this, offset, str.length);
@@ -70,7 +73,7 @@ export class Buffer {
     from = this.text.clamp(from);
     to = this.text.clamp(to);
     if (from === to) return '';
-    this.checkWritable(opts);
+    this.checkWritable(opts, from);
     runHooks('before-change-functions', this, from, to);
     const removed = this.text.delete(from, to);
     adjustMarkersForDelete(this, from, to);

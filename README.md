@@ -108,6 +108,20 @@ plain text, so vim motions and search work; commands act on the line at point.
 - From any file: `SPC g S` / `SPC g U` stage or unstage it, `SPC g L` its history,
   `SPC g l` the log, `SPC g c` commit, `SPC g b` checkout, `SPC g p` push
 
+## Agents (ACP)
+
+`SPC a a` opens Claude Code for the current project (via
+`npx @zed-industries/claude-code-acp`; needs Node.js and a Claude login: run `claude` in
+a terminal and `/login` once). Any ACP agent can be added with `defineAgent`.
+
+- Type after `❯` and press `RET` (insert state) to send; `S-RET` / `C-j` for a newline.
+  Mention files with `@path`. `C-c C-k` cancels, `C-c m` switches mode (e.g. plan),
+  `C-c n` new conversation, `C-c /` slash commands. `RET` on a tool line opens its file.
+- The agent reads files through your buffers (it sees unsaved edits) and writes through
+  them too (each edit is one undo step, then saved). Its shell commands run as processes
+  whose output shows under the tool call. Permission requests appear as a helm prompt.
+- From any file: `SPC a f` adds `@file` (and the selected lines) to the agent's input.
+
 ## Themes
 
 `SPC t t` (`load-theme`) picks a theme, previewing each as you move; the choice is
@@ -139,6 +153,7 @@ src/                  frontend (plain JS, no bundler)
   themes/             color themes
   persp/              perspectives
   git/                git interface
+  agent/              ACP client and agent buffers
   grammars/           bundled tree-sitter grammars and highlight queries
   vendor/             vendored third-party modules (web-tree-sitter)
 src-tauri/            Rust backend (files, processes, terminals)

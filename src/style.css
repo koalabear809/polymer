@@ -391,3 +391,23 @@ body.helm-active #echo { display: none; }
 .line.git-diff-add { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
 .line.git-diff-del { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
 .line.git-diff-file { color: var(--fg); font-weight: bold; }
+
+/* ---- agents ---- */
+
+.agent-title { color: var(--accent); font-weight: bold; }
+.agent-dim, .line.agent-dim { color: var(--fg-dim); }
+.agent-user { color: var(--accent); font-weight: bold; }
+.agent-prompt { color: var(--accent); font-weight: bold; }
+.agent-tool { color: var(--fg-muted); }
+.agent-status-completed { color: var(--green); }
+.agent-status-in_progress { color: var(--yellow); }
+.agent-status-pending { color: var(--fg-dim); }
+.agent-status-failed { color: var(--error); }
+.agent-done { color: var(--fg-dim); text-decoration: line-through; }
+.agent-code { color: var(--syn-string); }
+.agent-heading { color: var(--accent-2); font-weight: bold; }
+.agent-bold { font-weight: bold; }
+.line.agent-thought { color: var(--fg-dim); font-style: italic; }
+.line.agent-output { color: var(--fg-muted); }
+.line.agent-info { color: var(--fg-dim); }
+.line.agent-error { color: var(--error); }

@@ -46,8 +46,10 @@ fn quit_app(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    process::adopt_login_shell_path();
     tauri::Builder::default()
         .manage(terminal::Terminals::default())
+        .manage(process::Processes::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
             quit_app,
@@ -59,6 +61,10 @@ pub fn run() {
             fs::make_directory,
             fs::canonicalize_path,
             process::run_process,
+            process::proc_spawn,
+            process::proc_write,
+            process::proc_kill,
+            process::proc_list,
             terminal::term_spawn,
             terminal::term_write,
             terminal::term_resize,

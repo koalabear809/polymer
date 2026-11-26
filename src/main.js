@@ -28,6 +28,8 @@ import { reattachTerminals } from './terminal/term.js';
 import { restoreChosenTheme } from './themes/themes.js';
 import { initPerspectives } from './persp/persp.js';
 import './git/index.js';
+import './agent/index.js';
+import { killOrphanAgents } from './agent/agent.js';
 
 const SCRATCH = `// Welcome to Polymer. This is *scratch*: JavaScript you can edit and evaluate.
 //
@@ -87,6 +89,7 @@ async function boot() {
     restoreChosenTheme();
     startStateSaving();
     // Shells keep running in the backend across reloads (SPC q r); pick them back up.
+    await killOrphanAgents(); // agent sessions don't survive a reload; their processes would linger
     const n = await reattachTerminals();
     if (n) message('Re-attached %d terminal%s (SPC b t)', n, n === 1 ? '' : 's');
   } catch (e) {
