@@ -111,17 +111,16 @@ export function processKey(key, e = null) {
 
   const ctx = activeContext();
   const keys = [...pending, key];
+  const res = lookupKey(ctx.keymaps, ctx.state, keys);
 
-  // Cancelling a pending prefix.
-  if (pending.length && (key === 'C-g' || key === 'ESC')) {
+  // C-g or ESC after a prefix cancels it, unless the sequence is bound (e.g. C-\ ESC).
+  if (pending.length && (key === 'C-g' || key === 'ESC') && !res) {
     consume(e);
     resetPending();
     if (capture) { const c = capture; capture = null; c.reject(new Quit()); }
     clearEcho();
     return Promise.resolve();
   }
-
-  const res = lookupKey(ctx.keymaps, ctx.state, keys);
 
   if (capture) {
     consume(e);

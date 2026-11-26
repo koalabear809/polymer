@@ -21,10 +21,13 @@ import { encodeKey, encodePaste, xtermColor } from './encode.js';
 defvar('term-shell', null, { doc: 'Program for new terminals (default: $SHELL as a login shell, or COMSPEC on Windows).' });
 defvar('term-shell-args', null, { doc: 'Arguments for term-shell (default: none for a custom shell).' });
 defvar('term-buffer-name', '*terminal*', { doc: 'Base name for terminal buffers.' });
+defvar('term-escape-passthrough-in-fullscreen', true, {
+  doc: 'When true, ESC goes to full-screen programs (vim, htop, less) instead of entering copy mode. C-\\ ESC always sends ESC.',
+});
 
 defineMajorMode('term-mode', {
   parent: 'special-mode',
-  doc: 'Terminal emulator. Insert state sends keys to the program; C-\\ C-n enters copy mode (normal state) over the scrollback; i returns.',
+  doc: 'Terminal emulator. Insert state sends keys to the program; ESC (or C-\\ C-n) enters copy mode (normal state) over the scrollback; i or a returns to the prompt.',
   lighter: 'Term',
 });
 
@@ -135,7 +138,7 @@ function setupBuffer(b, id) {
   b.term = { id, rows: 0, cols: 0, lines: [], decos: [], cursorRow: 0, cursorCol: 0, cursorVisible: true, appCursor: false, bracketedPaste: false, altScreen: false, displayOffset: 0, title: '', exited: false, copyMode: null, wheel: 0 };
   b.cursorShape = 'block';
   b.state = 'insert';
-  b.decorators.push((buf, line) => (buf.term?.copyMode ? buf.term.copyMode.decos[line] : buf.term?.decos[line]) ?? []);
+  b.decorators.push((buf, line) => (buf.term?.copyMode?.decos ? buf.term.copyMode.decos[line] : buf.term?.decos[line]) ?? []);
   // In insert state only term-raw-map is active; every other key goes to the program.
   b.keymapsFor = (state) => (state === 'insert' ? ['term-raw-map'] : bufferKeymaps(b));
   b.onUnboundKey = (key) => {
@@ -198,32 +201,60 @@ addHook('post-redisplay-hook', function termSyncSizes() {
 // ---------------------------------------------------------------------------
 // Copy mode
 
+/**
+ * Copy mode: replace the live screen with the whole scrollback as text. The cursor (and a
+ * visual selection's anchor, when entered by dragging the mouse) stays on the same
+ * characters it was on in the live view.
+ */
 async function enterCopyMode(b) {
   const t = b.term;
-  const snap = await invoke('term_snapshot', { id: t.id });
-  if (b.state === 'insert') return; // went back already
+  t.copyMode = { decos: null }; // stop live frames from redrawing while we fetch
+  let snap;
+  try {
+    snap = await invoke('term_snapshot', { id: t.id });
+  } catch (e) {
+    t.copyMode = null;
+    throw e;
+  }
+  if (b.state === 'insert') { t.copyMode = null; return; } // went back already
+  // Live row r is scrollback line (screenStart - displayOffset + r).
+  const shift = snap.screenStart - (t.displayOffset ?? 0);
+  const live = (pos) => {
+    const { line, col } = b.posAt(pos);
+    return { line: line + shift, col };
+  };
+  const point = live(b.point.pos);
+  const anchor = b.vim?.visual ? live(b.vim.visual.anchor.pos) : null;
   t.copyMode = { decos: snap.lines.map((l) => runsToDecos(l.runs)) };
   b.cursorHidden = false;
   b.setText(snap.lines.map((l) => l.text).join('\n') + (t.exited ? `\n[Process exited${t.exitCode != null ? ` with code ${t.exitCode}` : ''}]` : ''));
-  const line = Math.min(snap.cursorLine, b.lineCount - 1);
-  b.point.set(b.offsetAt(line, snap.cursorCol));
-  message('Copy mode: vim keys over the scrollback; i returns to the terminal');
+  const at = (p) => b.offsetAt(Math.min(p.line, b.lineCount - 1), p.col);
+  if (anchor && b.vim?.visual) b.vim.visual.anchor.set(at(anchor));
+  b.point.set(at(point));
+  runHooks('term-copy-mode-hook', b, true);
+  if (b.state === 'normal') message('Copy mode: vim keys over the scrollback; i or a returns to the prompt');
 }
 
+/** Back to the live terminal: cursor on the prompt, scrolled to the bottom. */
 function leaveCopyMode(b) {
   const t = b.term;
   t.copyMode = null;
-  if (t.displayOffset) invoke('term_scroll', { id: t.id, delta: 0 }).catch(() => {});
+  if (t.displayOffset) {
+    t.displayOffset = 0;
+    invoke('term_scroll', { id: t.id, delta: 0 }).catch(() => {});
+  }
   if (t.exited) {
     b.state = 'normal';
     return;
   }
-  renderLive(b);
+  renderLive(b); // puts point on the terminal's cursor
+  runHooks('term-copy-mode-hook', b, false);
 }
 
 addHook('vim-state-change-hook', function termCopyMode(b, from, to) {
   if (!b.term) return;
-  if (from === 'insert' && to === 'normal') enterCopyMode(b).catch((e) => message('%s', e.message ?? e));
+  // Leaving the live terminal for normal or visual state (ESC, or a mouse drag).
+  if (from === 'insert' && (to === 'normal' || to === 'visual')) enterCopyMode(b).catch((e) => message('%s', e.message ?? e));
   else if (to === 'insert' && from !== 'insert') leaveCopyMode(b);
 });
 
@@ -334,6 +365,23 @@ defcommand('term-paste', { doc: 'In copy mode: paste a register into the termina
   if (r?.text) await write(b, encodePaste(r.text, b.term.bracketedPaste));
 });
 
+defcommand('term-escape', { doc: 'ESC in a terminal: enter copy mode, or send ESC to a full-screen program (see term-escape-passthrough-in-fullscreen).' }, () => {
+  const b = currentBuffer();
+  if (!b.term) return;
+  if (b.term.altScreen && getVarOr('term-escape-passthrough-in-fullscreen', true, b)) return write(b, '\x1b');
+  return callNormalState();
+});
+
+defcommand('term-send-escape', { doc: 'Send ESC to the program (C-\\ ESC).' }, () => {
+  const b = currentBuffer();
+  if (b.term) return write(b, '\x1b');
+});
+
+async function callNormalState() {
+  const { callInteractively } = await import('../core/command-loop.js');
+  return callInteractively('vim-normal-state');
+}
+
 defcommand('term-interrupt', { doc: 'Send C-c to the terminal (works from copy mode too).' }, () => {
   const b = currentBuffer();
   if (b.term) return write(b, '\x03');
@@ -357,8 +405,10 @@ defcommand('term-list', { doc: 'Switch to a terminal buffer.' }, async () => {
 
 // Insert state: everything goes to the program except these.
 defineKey({ keymaps: 'term-raw-map', states: 'insert' }, {
+  'ESC': 'term-escape',
   'C-\\': { label: 'term' },
   'C-\\ C-n': 'vim-normal-state',
+  'C-\\ ESC': 'term-send-escape',
 });
 
 // Copy mode (normal state).

@@ -67,9 +67,12 @@ TypeScript, TSX, JSON, CSS, HTML, Python, Rust, Go, C, C++, Bash, Lua, TOML, YAM
 another window; `SPC b t` lists terminals. Built on `portable-pty` (ConPTY on Windows) and
 `alacritty_terminal`, rendered by Polymer's own view.
 
-- Insert state sends every key to the program. `C-\ C-n` enters **copy mode**: the whole
-  scrollback becomes text for vim motions, `/` search and `y`; `p` pastes into the terminal,
-  `i` returns. The mouse wheel scrolls history (or sends arrows in full-screen programs).
+- Insert state sends every key to the program. `ESC` (or `C-\ C-n`) enters **copy mode**:
+  the whole scrollback becomes text for vim motions, `/` search, `v`/`V` and `y`; dragging
+  the mouse selects too. `p` pastes into the terminal; `i` or `a` returns to the prompt.
+  In full-screen programs (vim, htop, less) `ESC` goes to the program
+  (`term-escape-passthrough-in-fullscreen`); `C-\ ESC` always sends `ESC`.
+  The mouse wheel scrolls history (or sends arrows in full-screen programs).
 - Shells run in the backend, so `SPC q r` (reload) re-attaches to them.
 - Options: `term-shell`, `term-shell-args`; hooks: `term-mode-hook`, `term-exit-hook`,
   `term-bell-hook`. Add keys that work while the terminal has focus to `term-raw-map`.
