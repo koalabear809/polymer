@@ -85,6 +85,14 @@ pub fn write_text_file(path: String, text: String, crlf: bool) -> Result<Option<
     Ok(fs::metadata(&target).ok().as_ref().and_then(mtime_ms))
 }
 
+/// Raw bytes (returned as an ArrayBuffer in JS, without JSON encoding).
+#[tauri::command]
+pub fn read_binary_file(path: String) -> Result<tauri::ipc::Response, String> {
+    let p = PathBuf::from(&path);
+    let bytes = fs::read(&p).map_err(|e| err(&p, e))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[tauri::command]
 pub fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
     let p = PathBuf::from(&path);

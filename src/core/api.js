@@ -17,6 +17,7 @@ import * as errors from './errors.js';
 import * as loader from './loader.js';
 import * as files from './files.js';
 import * as vim from '../vim/core.js';
+import * as treesit from '../syntax/treesit.js';
 import * as vimEx from '../vim/ex.js';
 import * as vimRegisters from '../vim/registers.js';
 
@@ -128,6 +129,12 @@ export const api = {
   executeEx: vimEx.executeEx,
   getRegister: vimRegisters.getRegister,
   storeRegister: vimRegisters.storeRegister,
+
+  // tree-sitter
+  defineTreesitLanguage: treesit.defineTreesitLanguage,
+  treesitTree: treesit.treesitTree,
+  treesitNodeAt: treesit.nodeAt,
+  treesitLanguageForBuffer: treesit.languageForBuffer,
 
   // errors
   PolymerError: errors.PolymerError,

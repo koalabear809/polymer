@@ -23,6 +23,7 @@ import './commands/language-modes.js';
 import { loadInitFile } from './commands/config.js';
 import './commands/default-keys.js';
 import './vim/index.js';
+import './syntax/index.js';
 
 const SCRATCH = `// Welcome to Polymer. This is *scratch*: JavaScript you can edit and evaluate.
 //

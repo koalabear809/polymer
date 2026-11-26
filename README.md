@@ -42,6 +42,25 @@ Polymer reads `~/.config/polymer/` (or `$POLYMER_CONFIG_DIR`):
   `SPC h r p` reloads one after editing. `SPC e b` in a file buffer evaluates it as a module.
 - Start with `POLYMER_NO_INIT=1` (or `-q`) to skip `init.js`.
 
+## Syntax (tree-sitter)
+
+Buffers in a language with a bundled grammar get `treesit-mode` (shown as `TS` in the mode
+line): incremental parsing and highlighting of the visible lines. Bundled: JavaScript,
+TypeScript, TSX, JSON, CSS, HTML, Python, Rust, Go, C, C++, Bash, Lua, TOML, YAML
+(`src/grammars/`; each loads the first time it's needed).
+
+- Text objects: `if`/`af` function, `ic`/`ac` class (struct, impl, interface, enum, trait),
+  `ia`/`aa` argument or parameter. Motions: `]f` `[f` `]c` `[c`.
+- `SPC h t i` shows the node at point, `SPC h t e` the whole tree; `SPC t h` toggles highlighting.
+- Add a language from a package:
+  ```js
+  defineTreesitLanguage('zig', {
+    wasm: __dirname + 'tree-sitter-zig.wasm',
+    highlights: __dirname + 'highlights.scm',
+    modes: ['zig-mode'],
+  })
+  ```
+
 ## Layout
 
 ```
@@ -49,7 +68,10 @@ src/                  frontend (plain JS, no bundler)
   main.js             boot
   core/               registry, keymaps, command loop, buffers, windows, helm, ...
   commands/           built-in commands, help, default key bindings
-  vendor/             vendored third-party modules (none yet)
+  vim/                vim layer (motions, operators, text objects, ex, search)
+  syntax/             tree-sitter integration
+  grammars/           bundled tree-sitter grammars and highlight queries
+  vendor/             vendored third-party modules (web-tree-sitter)
 src-tauri/            Rust backend
 ```
 

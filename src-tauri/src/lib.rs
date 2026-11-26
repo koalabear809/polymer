@@ -49,6 +49,7 @@ pub fn run() {
             app_info,
             quit_app,
             fs::read_text_file,
+            fs::read_binary_file,
             fs::write_text_file,
             fs::list_directory,
             fs::path_info,
