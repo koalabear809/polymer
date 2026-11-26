@@ -386,6 +386,8 @@ pub fn term_spawn(state: State<'_, Terminals>, options: SpawnOptions, channel: C
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TERM_PROGRAM", "Polymer");
+    // BSD/macOS ls and other tools only color their output when this is set.
+    cmd.env("CLICOLOR", "1");
     for (k, v) in options.env.unwrap_or_default() {
         cmd.env(k, v);
     }
@@ -642,5 +644,24 @@ mod tests {
         }
         let _ = child.wait();
         assert!(out.contains("polymer-ok"), "got {out:?}");
+    }
+}
+
+#[cfg(test)]
+mod frame_json_tests {
+    use super::*;
+
+    #[test]
+    fn frame_serializes_in_the_shape_the_frontend_reads() {
+        let ev = TermEvent::Frame {
+            rows: 1, cols: 10,
+            lines: vec![Row { i: 0, text: "red".into(), runs: vec![Run { s: 0, e: 3, fg: Some("1".into()), bg: None, f: 1 }] }],
+            cursor_row: Some(0), cursor_col: 3, cursor_visible: true, app_cursor: false,
+            bracketed_paste: false, alt_screen: false, display_offset: 0, history: 0, title: None, bell: false,
+        };
+        let json = serde_json::to_string(&ev).unwrap();
+        assert!(json.contains(r#""type":"frame""#), "{json}");
+        assert!(json.contains(r#""runs":[{"s":0,"e":3,"fg":"1","f":1}]"#), "{json}");
+        assert!(json.contains(r#""cursorRow":0"#), "{json}");
     }
 }

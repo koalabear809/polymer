@@ -130,6 +130,7 @@ function setupBuffer(b, id) {
   setLocal('display-line-numbers', false, b);
   setLocal('global-hl-line-mode', false, b);
   setLocal('scroll-margin', 0, b);
+  setLocal('auto-hscroll-mode', false, b); // the terminal is sized to the window; never scroll sideways
   b.undoEnabled = false;
   b.term = { id, rows: 0, cols: 0, lines: [], decos: [], cursorRow: 0, cursorCol: 0, cursorVisible: true, appCursor: false, bracketedPaste: false, altScreen: false, displayOffset: 0, title: '', exited: false, copyMode: null, wheel: 0 };
   b.cursorShape = 'block';
@@ -279,6 +280,38 @@ export async function reattachTerminals() {
 
 defcommand('term', { doc: 'Open a terminal in the selected window (in this buffer\'s directory).' }, () => openTerminal());
 defcommand('term-other-window', { doc: 'Open a terminal in another window.' }, () => openTerminal({ otherWindow: true }));
+
+/** A shell script that prints the color palette, the 256-color cube, truecolor and styles. */
+const COLOR_TEST = String.raw`
+printf '16 colors:
+'
+for i in 0 1 2 3 4 5 6 7; do printf '[4%sm  %s  ' $i $i; done; printf '[0m
+'
+for i in 0 1 2 3 4 5 6 7; do printf '[10%sm  %s  ' $i $((i+8)); done; printf '[0m
+'
+for i in 0 1 2 3 4 5 6 7; do printf '[3%sm color%s ' $i $i; done; printf '[0m
+
+'
+printf '256 colors:
+'
+for i in $(seq 16 51); do printf '[48;5;%sm  ' $i; done; printf '[0m
+'
+for i in $(seq 232 255); do printf '[48;5;%sm  ' $i; done; printf '[0m
+
+'
+printf 'truecolor:
+'
+for i in $(seq 0 4 255); do printf '[48;2;%s;%s;%sm ' $i $((255-i)) 128; done; printf '[0m
+
+'
+printf '[1mbold[0m [3mitalic[0m [4munderline[0m [2mdim[0m [9mstrike[0m [7mreverse[0m
+'
+`;
+
+defcommand('term-color-test', { doc: 'Open a terminal that prints the colors and text styles it can show.' }, () => {
+  if (navigator.platform?.startsWith('Win')) throw new PolymerError('user-error', 'term-color-test needs a POSIX shell');
+  return openTerminal({ name: '*terminal colors*', command: '/bin/sh', args: ['-c', COLOR_TEST] });
+});
 
 defcommand('term-send-raw', {
   doc: 'Send text to the current terminal as typed.',

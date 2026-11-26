@@ -15,6 +15,7 @@ defvar('display-line-numbers', 'relative', { doc: 'Show line numbers: "relative"
 defvar('scroll-margin', 3, { doc: 'Lines of context kept above and below the cursor when scrolling.' });
 defvar('global-hl-line-mode', true, { doc: 'Highlight the cursor line in the selected window.' });
 defvar('tab-width', 4, { doc: 'Display width of a tab character, in columns.' });
+defvar('auto-hscroll-mode', true, { doc: 'When true, windows scroll sideways to keep the cursor visible. Terminals turn it off: they always fit the window.' });
 defvar('cursor-in-non-selected-windows', true, { doc: 'Show a hollow cursor in windows that are not selected.' });
 
 let metrics = null;
@@ -335,10 +336,13 @@ export function renderView(win, selected, point) {
     win.maxColsKey = sizeKey;
     win.maxColsBuffer = buf;
   }
-  const contentW = gutterPx + (win.maxCols + 2) * cw;
+  const hscroll = getVarOr('auto-hscroll-mode', true, buf);
+  const contentW = hscroll ? gutterPx + (win.maxCols + 2) * cw : 0;
+  body.style.overflowX = hscroll ? '' : 'hidden';
   win.spacerEl.style.height = `${lineCount * lh}px`;
   win.spacerEl.style.width = `${contentW}px`;
-  win.linesEl.style.minWidth = `max(${contentW}px, 100%)`;
+  win.linesEl.style.minWidth = hscroll ? `max(${contentW}px, 100%)` : '100%';
+  if (!hscroll && body.scrollLeft) setScroll(win, undefined, 0);
 
   const viewH = body.clientHeight;
   const visibleLines = Math.max(1, Math.floor(viewH / lh));
@@ -411,7 +415,7 @@ export function renderView(win, selected, point) {
     cursor.dataset.y = pos.line * lh;
 
     // Horizontal scrolling to keep the cursor visible.
-    if (pointMoved) {
+    if (pointMoved && hscroll) {
       const viewW = body.clientWidth;
       if (cx - gutterPx < body.scrollLeft) setScroll(win, undefined, Math.max(0, cx - gutterPx - 4 * cw));
       else if (cx + w > body.scrollLeft + viewW) setScroll(win, undefined, cx + w - viewW + 4 * cw);
