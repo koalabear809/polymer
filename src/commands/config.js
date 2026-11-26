@@ -36,7 +36,7 @@ export function initTemplate(dir) {
 // Settings
 
 // setq('tab-width', 2)
-// setq('display-line-numbers', 'relative')
+// setq('display-line-numbers', true)        // absolute numbers ('relative' is the default)
 // setq('scroll-margin', 5)
 // setq('vim-want-Y-yank-to-eol', false)
 

@@ -11,7 +11,7 @@ import { defvar, getVarOr } from './registry.js';
 import { overlaysIn } from './marker.js';
 import { isPlainLine, visualColumn, columnForVisual, cellWidthAt } from './width.js';
 
-defvar('display-line-numbers', true, { doc: 'Show line numbers: true, false, or "relative".' });
+defvar('display-line-numbers', 'relative', { doc: 'Show line numbers: "relative" (default; the cursor line shows its absolute number), true for absolute, or false.' });
 defvar('scroll-margin', 3, { doc: 'Lines of context kept above and below the cursor when scrolling.' });
 defvar('global-hl-line-mode', true, { doc: 'Highlight the cursor line in the selected window.' });
 defvar('tab-width', 4, { doc: 'Display width of a tab character, in columns.' });
@@ -81,7 +81,7 @@ export function createView(win, onScroll) {
 const FRINGE = 8; // px of space before the text, like Emacs's fringe
 
 function gutterWidthChars(buf) {
-  if (!getVarOr('display-line-numbers', true, buf)) return 0;
+  if (!getVarOr('display-line-numbers', 'relative', buf)) return 0;
   return Math.max(3, String(buf.lineCount).length) + 1;
 }
 
@@ -320,7 +320,7 @@ export function renderView(win, selected, point) {
   const { cw, lh } = viewMetrics();
   const lineCount = buf.lineCount;
   const tabWidth = getVarOr('tab-width', 4, buf);
-  const numbers = getVarOr('display-line-numbers', true, buf);
+  const numbers = getVarOr('display-line-numbers', 'relative', buf);
   const gutterChars = gutterWidthChars(buf);
   const gutterPx = gutterPixels(buf);
   body.style.setProperty('--tab-width', tabWidth);
