@@ -24,6 +24,7 @@ import { loadInitFile } from './commands/config.js';
 import './commands/default-keys.js';
 import './vim/index.js';
 import './syntax/index.js';
+import { reattachTerminals } from './terminal/term.js';
 
 const SCRATCH = `// Welcome to Polymer. This is *scratch*: JavaScript you can edit and evaluate.
 //
@@ -80,6 +81,9 @@ async function boot() {
     else await loadInitFile();
     await restoreState();
     startStateSaving();
+    // Shells keep running in the backend across reloads (SPC q r); pick them back up.
+    const n = await reattachTerminals();
+    if (n) message('Re-attached %d terminal%s (SPC b t)', n, n === 1 ? '' : 's');
   } catch (e) {
     reportError(e);
   }

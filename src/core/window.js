@@ -321,6 +321,10 @@ function buildLayout(node) {
       w.modeLineEl.className = 'mode-line';
       w.el.append(body, w.modeLineEl);
       w.el.addEventListener('mousedown', (e) => onWindowMouseDown(w, e));
+      // Buffers can take over the wheel (a terminal scrolls its own history).
+      body.addEventListener('wheel', (e) => {
+        if (w.buffer?.onWheel && w.buffer.onWheel(e, w)) e.preventDefault();
+      }, { passive: false });
     }
     return w.el;
   }

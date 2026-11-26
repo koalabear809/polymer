@@ -169,7 +169,10 @@ function renderLineText(text, decos, virtual) {
       lt.append(seg);
     } else {
       const span = document.createElement('span');
-      span.className = faces.map((f) => f.face).join(' ');
+      span.className = faces.map((f) => f.face ?? '').join(' ').trim();
+      // Decorations may also carry inline CSS (e.g. terminal 256-color/truecolor output).
+      const style = faces.map((f) => f.style).filter(Boolean).join(';');
+      if (style) span.style.cssText = style;
       span.textContent = seg;
       lt.appendChild(span);
     }
@@ -389,14 +392,15 @@ export function renderView(win, selected, point) {
 
   // Cursor.
   const cursor = win.cursorEl;
-  const showCursor = selected || getVarOr('cursor-in-non-selected-windows', true, buf);
+  const showCursor = (selected || getVarOr('cursor-in-non-selected-windows', true, buf)) && !buf.cursorHidden;
   cursor.hidden = !showCursor;
   if (showCursor) {
     const { x, w } = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
     const lineText = buf.lineText(pos.line);
     const ch = pos.col < lineText.length ? lineText[pos.col] : ' ';
     const state = selected ? buf.state : 'inactive';
-    const shape = { insert: 'bar', replace: 'underline', operator: 'underline', inactive: 'hollow' }[state] ?? 'block';
+    // A buffer can override the shape (terminals keep a block cursor in insert state).
+    const shape = (state !== 'inactive' && buf.cursorShape) || ({ insert: 'bar', replace: 'underline', operator: 'underline', inactive: 'hollow' }[state] ?? 'block');
     cursor.className = `cursor cursor-${shape} state-${state}`;
     cursor.textContent = ch === '\t' ? ' ' : ch;
     cursor.style.width = `${Math.max(w, 2)}px`;

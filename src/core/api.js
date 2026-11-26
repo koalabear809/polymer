@@ -18,6 +18,7 @@ import * as loader from './loader.js';
 import * as files from './files.js';
 import * as vim from '../vim/core.js';
 import * as treesit from '../syntax/treesit.js';
+import * as terminal from '../terminal/term.js';
 import * as vimEx from '../vim/ex.js';
 import * as vimRegisters from '../vim/registers.js';
 
@@ -135,6 +136,9 @@ export const api = {
   treesitTree: treesit.treesitTree,
   treesitNodeAt: treesit.nodeAt,
   treesitLanguageForBuffer: treesit.languageForBuffer,
+
+  // terminals
+  openTerminal: terminal.openTerminal,
 
   // errors
   PolymerError: errors.PolymerError,

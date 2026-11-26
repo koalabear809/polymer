@@ -42,18 +42,23 @@ function bufferContext() {
   const b = currentBuffer();
   return {
     state: b?.state ?? 'normal',
-    keymaps: b ? bufferKeymaps(b) : ['global'],
+    // A buffer may choose its keymaps per state (a terminal passes almost everything to
+    // the program in insert state).
+    keymaps: b ? (b.keymapsFor?.(b.state) ?? bufferKeymaps(b)) : ['global'],
     // In insert state, unbound printable keys go through to the input element and are
     // inserted. Everything else is swallowed so the webview doesn't act on it (SPC
     // scrolling, Tab focus, ...). Super (Cmd) chords are left for the OS menu/clipboard.
     unbound(key, e) {
+      if (b?.onUnboundKey) {
+        if (b.onUnboundKey(key, e)) { e.preventDefault(); return; }
+      }
       if (key.includes('s-')) return;
       if ((b?.state === 'insert' || b?.state === 'replace') && isPrintableKey(key)) return;
       e.preventDefault();
       runHooks('unbound-key-hook', key, b);
     },
-    insertsText: (key) => (b?.state === 'insert' || b?.state === 'replace') && isPrintableKey(key),
-    onUnbound: (key) => runHooks('unbound-key-hook', key, b),
+    insertsText: (key) => !b?.onUnboundKey && (b?.state === 'insert' || b?.state === 'replace') && isPrintableKey(key),
+    onUnbound: (key) => (b?.onUnboundKey ? b.onUnboundKey(key, null) : runHooks('unbound-key-hook', key, b)),
   };
 }
 

@@ -24,8 +24,14 @@ function canInsert() {
   return !!b && (b.state === 'insert' || b.state === 'replace');
 }
 
-async function insertInput(text) {
+async function insertInput(text, { paste = false } = {}) {
   if (!text) return;
+  // Buffers can take text themselves (a terminal sends it to the program).
+  const b = currentBuffer();
+  if (b?.onTextInput && !helmActive()) {
+    try { await b.onTextInput(text, { paste }); } catch (e) { reportError(e); }
+    return;
+  }
   if (!canInsert()) return;
   try {
     await callInteractively('self-insert-command', { args: [text] });
@@ -79,7 +85,8 @@ export function attachInput(el) {
     let text = e.clipboardData?.getData('text/plain');
     if (!text || helmActive()) return;
     text = text.replace(/\r\n?/g, '\n');
-    if (canInsert()) insertInput(text);
+    if (currentBuffer()?.onTextInput) insertInput(text, { paste: true });
+    else if (canInsert()) insertInput(text);
     else if (currentBuffer()) {
       // Cmd-V outside insert state pastes after the cursor (or over a selection).
       callInteractively('vim-paste-from-clipboard', { args: [text] }).catch(reportError);

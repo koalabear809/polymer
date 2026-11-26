@@ -61,6 +61,19 @@ TypeScript, TSX, JSON, CSS, HTML, Python, Rust, Go, C, C++, Bash, Lua, TOML, YAM
   })
   ```
 
+## Terminals
+
+`SPC o t` opens a terminal (your login shell, in the buffer's directory); `SPC o T` in
+another window; `SPC b t` lists terminals. Built on `portable-pty` (ConPTY on Windows) and
+`alacritty_terminal`, rendered by Polymer's own view.
+
+- Insert state sends every key to the program. `C-\ C-n` enters **copy mode**: the whole
+  scrollback becomes text for vim motions, `/` search and `y`; `p` pastes into the terminal,
+  `i` returns. The mouse wheel scrolls history (or sends arrows in full-screen programs).
+- Shells run in the backend, so `SPC q r` (reload) re-attaches to them.
+- Options: `term-shell`, `term-shell-args`; hooks: `term-mode-hook`, `term-exit-hook`,
+  `term-bell-hook`. Add keys that work while the terminal has focus to `term-raw-map`.
+
 ## Layout
 
 ```
@@ -70,9 +83,10 @@ src/                  frontend (plain JS, no bundler)
   commands/           built-in commands, help, default key bindings
   vim/                vim layer (motions, operators, text objects, ex, search)
   syntax/             tree-sitter integration
+  terminal/           terminal buffers (frontend)
   grammars/           bundled tree-sitter grammars and highlight queries
   vendor/             vendored third-party modules (web-tree-sitter)
-src-tauri/            Rust backend
+src-tauri/            Rust backend (files, terminals)
 ```
 
 ## Trying it out

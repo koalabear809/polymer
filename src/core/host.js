@@ -10,6 +10,14 @@ export async function invoke(cmd, args) {
   return T.core.invoke(cmd, args);
 }
 
+/** A Tauri channel for streaming messages from Rust: `onMessage` receives each one. */
+export function createChannel(onMessage) {
+  if (!isTauri) throw new Error('Not running under Tauri');
+  const ch = new T.core.Channel();
+  ch.onmessage = onMessage;
+  return ch;
+}
+
 let info = null;
 /** { version, platform, configDir } from the backend, or browser placeholders. */
 export async function appInfo() {

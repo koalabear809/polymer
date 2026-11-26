@@ -1,4 +1,5 @@
 mod fs;
+mod terminal;
 
 use serde::Serialize;
 use std::path::PathBuf;
@@ -45,6 +46,7 @@ fn quit_app(app: tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(terminal::Terminals::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
             quit_app,
@@ -55,6 +57,14 @@ pub fn run() {
             fs::path_info,
             fs::make_directory,
             fs::canonicalize_path,
+            terminal::term_spawn,
+            terminal::term_write,
+            terminal::term_resize,
+            terminal::term_scroll,
+            terminal::term_snapshot,
+            terminal::term_kill,
+            terminal::term_list,
+            terminal::term_attach,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Polymer");
