@@ -19,7 +19,9 @@ import { completingRead } from '../core/helm/helm.js';
 import { message } from '../core/echo.js';
 import { PolymerError, Quit } from '../core/errors.js';
 import { invoke, isTauri } from '../core/host.js';
-import { expandFileName, abbreviateFileName, pathInfo, basename } from '../core/files.js';
+import {
+  expandFileName, abbreviateFileName, pathInfo, basename, asDirectory, makeDirectory, writeTextFile, listDirectory,
+} from '../core/files.js';
 import { AcpClient } from './acp.js';
 
 defvar('agent-definitions', {
@@ -28,6 +30,9 @@ defvar('agent-definitions', {
 defvar('agent-default', 'claude-code', { doc: 'The agent started by SPC a a.' });
 defvar('agent-mcp-servers', [], { doc: 'Extra MCP servers given to new agent sessions ([{ type: "http", name, url, headers }]).' });
 defvar('agent-tool-output-lines', 12, { doc: 'Lines of tool output (diffs, terminal output) shown per tool call.' });
+defvar('agent-save-transcripts', true, { doc: 'Save each conversation as Markdown in agent-transcript-directory under the agent\'s directory.' });
+defvar('agent-transcript-directory', '.polymer/agent/', { doc: 'Where transcripts go, relative to the agent buffer\'s directory.' });
+defvar('agent-transcript-save-delay', 2000, { doc: 'Milliseconds of quiet before a transcript is saved (it is also saved at the end of each turn).' });
 
 const userError = (msg) => new PolymerError('user-error', msg);
 const PROMPT = '❯ ';
@@ -256,6 +261,7 @@ function onUpdate(b, { update }) {
   }
   runHooks('agent-update-hook', b, update);
   scheduleRedraw(b);
+  scheduleTranscriptSave(b);
 }
 
 async function requestPermission(b, params) {
@@ -343,6 +349,7 @@ async function startSession(b) {
       a.status = 'disconnected';
       a.items.push({ type: 'info', text: `[${a.label} exited${code !== null && code !== undefined ? ` with code ${code}` : ''}; M-x agent-restart to start again]` });
       scheduleRedraw(b);
+      saveTranscript(b).catch(() => {});
     },
     onTerminalOutput: () => scheduleRedraw(b),
   });
@@ -409,6 +416,7 @@ export async function agentSend(b, text) {
   a.items.push({ type: 'user', text });
   a.busy = true;
   redraw(b);
+  scheduleTranscriptSave(b);
   b.point.set(b.length);
   try {
     const res = await a.client.prompt(a.sessionId, await promptBlocks(text, a.cwd));
@@ -418,6 +426,7 @@ export async function agentSend(b, text) {
   } finally {
     a.busy = false;
     scheduleRedraw(b);
+    saveTranscript(b).catch((e) => message('Could not save transcript: %s', e.message ?? e));
     runHooks('agent-turn-finished-hook', b);
   }
 }
@@ -475,6 +484,8 @@ defcommand('agent-set-mode', { doc: 'Change the session mode, e.g. plan or accep
 defcommand('agent-new-session', { doc: 'Start a fresh conversation in this buffer.' }, async () => {
   const b = requireAgent();
   if (b.agent.busy) await b.agent.client.cancel(b.agent.sessionId).catch(() => {});
+  await saveTranscript(b).catch(() => {});
+  b.agent.transcript = null; // the next conversation gets its own file
   b.agent.items = [];
   b.agent.status = 'new session…';
   redraw(b);
@@ -549,7 +560,108 @@ for (const [key, cmd] of [['i', 'vim-insert'], ['a', 'vim-append'], ['I', 'vim-i
 }
 
 addHook('kill-buffer-hook', function agentStop(b) {
-  if (b.agent?.client) b.agent.client.kill();
+  if (!b.agent) return;
+  saveTranscript(b).catch(() => {});
+  if (b.agent.client) b.agent.client.kill();
+});
+
+// ---------------------------------------------------------------------------
+// Transcripts (Markdown in <cwd>/.polymer/agent/)
+
+const pad = (n) => String(n).padStart(2, '0');
+const stamp = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+const fence = (text, lang = '') => {
+  // A fence longer than any backtick run inside the text.
+  const longest = Math.max(2, ...(text.match(/`+/g) ?? []).map((r) => r.length));
+  const f = '`'.repeat(longest + 1);
+  return `${f}${lang}\n${text.replace(/\n+$/, '')}\n${f}`;
+};
+
+/** The conversation as Markdown. */
+export function transcriptMarkdown(b) {
+  const a = b.agent;
+  const out = [`# ${a.label} — ${abbreviateFileName(a.cwd)}`, ''];
+  const started = a.transcript?.startedAt ?? new Date();
+  out.push(`Started ${started.toLocaleString()}${a.sessionId ? ` · session \`${a.sessionId}\`` : ''}`, '');
+  const STATUS = { pending: '…', in_progress: '⟳', completed: '✓', failed: '✗' };
+  for (const item of a.items) {
+    if (item.type === 'user') {
+      out.push('## You', '', item.text, '');
+    } else if (item.type === 'assistant') {
+      out.push(`## ${a.label}`, '', item.text.replace(/\n+$/, ''), '');
+    } else if (item.type === 'thought') {
+      out.push(item.text.replace(/\n+$/, '').split('\n').map((l) => `> _${l || ' '}_`).join('\n'), '');
+    } else if (item.type === 'tool') {
+      const loc = item.locations?.[0]?.path ? ` — \`${abbreviateFileName(item.locations[0].path)}${item.locations[0].line ? `:${item.locations[0].line}` : ''}\`` : '';
+      out.push(`**${STATUS[item.status] ?? '•'} ${item.title ?? item.kind ?? 'tool'}**${loc}`, '');
+      for (const c of item.content ?? []) {
+        if (c.type === 'diff') {
+          out.push(`\`${abbreviateFileName(c.path ?? '')}\``, '', fence(diffLines(c.oldText, c.newText).join('\n'), 'diff'), '');
+        } else if (c.type === 'content') {
+          const t = blockText(c.content);
+          if (t.trim()) out.push(fence(t), '');
+        } else if (c.type === 'terminal') {
+          const t = a.client?.terminals.get(c.terminalId);
+          if (t) {
+            const lines = t.output.replace(/\n+$/, '').split('\n');
+            const shown = lines.length > 200 ? [...lines.slice(-200)] : lines;
+            out.push(fence(`$ ${t.command}\n${shown.join('\n')}${t.exit ? `\n[exit ${t.exit.exitCode ?? t.exit.signal}]` : ''}`, 'console'), '');
+          }
+        }
+      }
+    } else if (item.type === 'plan') {
+      out.push('### Plan', '', ...item.entries.map((e) => `- [${e.status === 'completed' ? 'x' : ' '}] ${e.content}${e.status === 'in_progress' ? ' _(in progress)_' : ''}`), '');
+    } else if (item.type === 'info' || item.type === 'error') {
+      out.push(`_${item.text}_`, '');
+    }
+  }
+  return `${out.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`;
+}
+
+const transcriptDir = (b) => asDirectory(expandFileName(getVarOr('agent-transcript-directory', '.polymer/agent/', b), asDirectory(b.agent.cwd)));
+
+/** Write the transcript now (only once the conversation has a message). Returns the path. */
+export async function saveTranscript(b) {
+  const a = b.agent;
+  if (!a || !getVarOr('agent-save-transcripts', true, b)) return null;
+  clearTimeout(a.saveTimer);
+  if (!a.items.some((i) => i.type === 'user')) return null;
+  if (!a.transcript) {
+    const startedAt = new Date();
+    a.transcript = { startedAt, path: `${transcriptDir(b)}${stamp(startedAt)}-${a.name}.md` };
+  }
+  await makeDirectory(transcriptDir(b));
+  await writeTextFile(a.transcript.path, transcriptMarkdown(b), false);
+  runHooks('agent-transcript-saved-hook', b, a.transcript.path);
+  return a.transcript.path;
+}
+
+function scheduleTranscriptSave(b) {
+  const a = b.agent;
+  if (!a || !getVarOr('agent-save-transcripts', true, b)) return;
+  clearTimeout(a.saveTimer);
+  a.saveTimer = setTimeout(() => saveTranscript(b).catch(() => {}), getVarOr('agent-transcript-save-delay', 2000, b));
+}
+
+defcommand('agent-open-transcript', { doc: 'Open this conversation\'s saved transcript (SPC a t).' }, async () => {
+  const b = requireAgent();
+  const path = await saveTranscript(b);
+  if (!path) throw userError('Nothing to save yet');
+  const { openFile } = await import('../commands/files.js');
+  return openFile(path, { otherWindow: true });
+});
+
+defcommand('agent-browse-transcripts', { doc: 'Open a saved transcript from this project (SPC a T).' }, async () => {
+  const b = currentBuffer();
+  const cwd = b.agent?.cwd ?? await projectRoot();
+  const dir = asDirectory(expandFileName(getVarOr('agent-transcript-directory', '.polymer/agent/', b), asDirectory(cwd)));
+  let entries = [];
+  try { entries = (await listDirectory(dir)).filter((e) => !e.isDir && e.name.endsWith('.md')); } catch { /* none yet */ }
+  if (!entries.length) throw userError(`No transcripts in ${abbreviateFileName(dir)}`);
+  const names = entries.map((e) => e.name).sort().reverse(); // newest first
+  const name = await completingRead('Transcript: ', names);
+  const { openFile } = await import('../commands/files.js');
+  return openFile(dir + name);
 });
 
 /** Kill agent processes left over from before a webview reload (their state is gone). */
@@ -588,5 +700,7 @@ defineKey({ keymaps: 'global', states: ['normal', 'visual'], prefix: 'SPC' }, {
   'a m': 'agent-set-mode',
   'a n': 'agent-new-session',
   'a r': 'agent-restart',
+  'a t': 'agent-open-transcript',
+  'a T': 'agent-browse-transcripts',
 });
 

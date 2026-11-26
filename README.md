@@ -121,6 +121,10 @@ a terminal and `/login` once). Any ACP agent can be added with `defineAgent`.
   them too (each edit is one undo step, then saved). Its shell commands run as processes
   whose output shows under the tool call. Permission requests appear as a helm prompt.
 - From any file: `SPC a f` adds `@file` (and the selected lines) to the agent's input.
+- Conversations are saved as Markdown in `.polymer/agent/` under the agent's directory
+  (`<start time>-<agent>.md`; tool calls with diffs and output, plans). `SPC a t` opens the
+  current one, `SPC a T` browses them. Options: `agent-save-transcripts`,
+  `agent-transcript-directory`.
 
 ## MCP server (agents controlling the editor)
 
