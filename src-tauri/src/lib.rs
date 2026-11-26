@@ -17,12 +17,12 @@ struct AppInfo {
     no_init: bool,
 }
 
-/// The user's config directory: $POLYMER_CONFIG_DIR, else ~/.config/polymer on every platform.
+/// The user's config directory: $POLYMER_CONFIG_DIR, else ~/.polymer on every platform.
 fn config_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("POLYMER_CONFIG_DIR") {
         return Some(PathBuf::from(dir));
     }
-    app.path().home_dir().ok().map(|h| h.join(".config").join("polymer"))
+    app.path().home_dir().ok().map(|h| h.join(".polymer"))
 }
 
 #[tauri::command]

@@ -20,7 +20,7 @@ import {
 import { appInfo } from './host.js';
 import { message } from './echo.js';
 
-defvar('user-config-directory', null, { doc: 'Polymer\'s configuration directory (ends with "/"), e.g. ~/.config/polymer/.' });
+defvar('user-config-directory', null, { doc: 'Polymer\'s configuration directory (ends with "/"), e.g. ~/.polymer/.' });
 defvar('user-init-file', null, { doc: 'The init file loaded at startup.' });
 defvar('load-path', [], { doc: 'Directories searched by require() for packages.' });
 defvar('init-file-loaded', false, { doc: 'True once init.js has been loaded successfully.' });

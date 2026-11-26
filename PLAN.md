@@ -98,7 +98,7 @@ helm({
 ### Config layout
 
 ```
-~/.config/polymer/
+~/.polymer/
   init.js
   packages/
     my-package/

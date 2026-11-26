@@ -19,10 +19,10 @@ also reloads it from inside the app.
 
 ## Configuration
 
-Polymer reads `~/.config/polymer/` (or `$POLYMER_CONFIG_DIR`):
+Polymer reads `~/.polymer/` (or `$POLYMER_CONFIG_DIR`):
 
 ```
-~/.config/polymer/
+~/.polymer/
   init.js                  evaluated at startup
   packages/<name>/         one directory per package
     package.json           optional: description, version, main, dependencies
