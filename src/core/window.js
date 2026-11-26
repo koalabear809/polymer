@@ -330,12 +330,137 @@ function buildLayout(node) {
   }
   const el = document.createElement('div');
   el.className = `split split-${node.dir}`;
+  node.el = el;
   node.children.forEach((c, i) => {
+    if (i > 0) el.appendChild(makeDivider(node, i - 1));
     const child = buildLayout(c);
     child.style.flex = `${node.weights[i]} 1 0`;
     el.appendChild(child);
   });
   return el;
+}
+
+const elementOf = (node) => (node.type === 'leaf' ? node.window.el : node.el);
+
+/** Smallest size (px) a child of a split may shrink to. */
+function minSize(horizontal) {
+  const { cw, lh } = viewMetrics();
+  return horizontal ? 10 * cw : 3 * lh;
+}
+
+/**
+ * Give a split's children new pixel sizes (in order). Sizes become weights, so they
+ * scale with the frame afterwards.
+ */
+function applySizes(node, sizes) {
+  const total = sizes.reduce((a, b) => a + b, 0) || 1;
+  const weightSum = node.weights.reduce((a, b) => a + b, 0) || node.children.length;
+  node.weights = sizes.map((s) => (s / total) * weightSum);
+  node.children.forEach((c, i) => {
+    const el = elementOf(c);
+    if (el) el.style.flex = `${node.weights[i]} 1 0`;
+  });
+  scheduleRedisplay();
+  runHooks('window-size-change-hook');
+}
+
+function childSizes(node) {
+  const horizontal = node.dir === 'row';
+  return node.children.map((c) => {
+    const r = elementOf(c)?.getBoundingClientRect();
+    return r ? (horizontal ? r.width : r.height) : 0;
+  });
+}
+
+/** Move `delta` px from child j to child i of a split (negative shrinks i). */
+function transfer(node, i, j, delta) {
+  const horizontal = node.dir === 'row';
+  const sizes = childSizes(node);
+  const min = minSize(horizontal);
+  const d = Math.max(min - sizes[i], Math.min(sizes[j] - min, delta));
+  sizes[i] += d;
+  sizes[j] -= d;
+  applySizes(node, sizes);
+  return d;
+}
+
+function makeDivider(node, i) {
+  const div = document.createElement('div');
+  div.className = 'divider';
+  div.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const horizontal = node.dir === 'row';
+    const start = horizontal ? e.clientX : e.clientY;
+    const startSizes = childSizes(node);
+    const min = minSize(horizontal);
+    const pair = startSizes[i] + startSizes[i + 1];
+    document.body.classList.add(horizontal ? 'resizing-col' : 'resizing-row');
+    const move = (ev) => {
+      const delta = (horizontal ? ev.clientX : ev.clientY) - start;
+      const a = Math.max(min, Math.min(pair - min, startSizes[i] + delta));
+      const sizes = [...startSizes];
+      sizes[i] = a;
+      sizes[i + 1] = pair - a;
+      applySizes(node, sizes);
+    };
+    const up = () => {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      document.body.classList.remove('resizing-col', 'resizing-row');
+      focusInput();
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+  // Double-click a divider to even out its two windows.
+  div.addEventListener('dblclick', () => {
+    const sizes = childSizes(node);
+    const half = (sizes[i] + sizes[i + 1]) / 2;
+    sizes[i] = half;
+    sizes[i + 1] = half;
+    applySizes(node, sizes);
+  });
+  return div;
+}
+
+/** The split (and the child of it containing `win`) that sizes `win` in a direction. */
+function sizingSplit(win, horizontal) {
+  const found = findLeaf(root, win);
+  if (!found) throw new PolymerError('error', 'Window is not live');
+  let node = found.node;
+  let parent = found.parent;
+  while (parent && parent.dir !== (horizontal ? 'row' : 'column')) {
+    node = parent;
+    parent = findParent(root, parent);
+  }
+  return parent ? { parent, index: parent.children.indexOf(node) } : null;
+}
+
+/**
+ * Grow `win` by `lines` lines (or columns, if horizontal); negative shrinks. Space comes
+ * from the neighbouring window. Returns the change actually made, in lines/columns.
+ */
+export function resizeWindow(win = selected, lines = 1, horizontal = false) {
+  const s = sizingSplit(win, horizontal);
+  if (!s) throw new PolymerError('user-error', `No window ${horizontal ? 'beside' : 'above or below'} this one to take space from`);
+  const { parent, index } = s;
+  const j = index < parent.children.length - 1 ? index + 1 : index - 1;
+  const { cw, lh } = viewMetrics();
+  const unit = horizontal ? cw : lh;
+  return Math.round(transfer(parent, index, j, lines * unit) / unit);
+}
+
+/** Make `win` as large as possible in one direction (the others keep their minimum). */
+export function maximizeWindow(win = selected, horizontal = false) {
+  const s = sizingSplit(win, horizontal);
+  if (!s) return;
+  const { parent, index } = s;
+  const sizes = childSizes(parent);
+  const total = sizes.reduce((a, b) => a + b, 0);
+  const min = minSize(horizontal);
+  const out = sizes.map((_, i) => (i === index ? total - min * (sizes.length - 1) : min));
+  applySizes(parent, out);
 }
 
 const STATE_TAGS = { normal: 'N', insert: 'I', visual: 'V', 'visual-line': 'VL', 'visual-block': 'VB', motion: 'M', emacs: 'E', replace: 'R', operator: 'O' };

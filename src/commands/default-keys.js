@@ -58,6 +58,12 @@ defineKey({ keymaps: 'global', states: ['normal', 'visual'], prefix: 'SPC' }, {
   'w k': 'windmove-up',
   'w l': 'windmove-right',
   'w =': 'balance-windows',
+  'w +': 'enlarge-window',
+  'w -': 'shrink-window',
+  'w >': 'enlarge-window-horizontally',
+  'w <': 'shrink-window-horizontally',
+  'w _': 'maximize-window-vertically',
+  'w |': 'maximize-window-horizontally',
 
   'h': { label: 'help' },
   'h f': 'describe-function',
@@ -74,6 +80,7 @@ defineKey({ keymaps: 'global', states: ['normal', 'visual'], prefix: 'SPC' }, {
 
   't': { label: 'toggles' },
   't d': 'toggle-debug-on-error',
+  't t': 'load-theme',
 
   'q': { label: 'quit/reload' },
   'q r': 'reload-polymer',
@@ -97,6 +104,12 @@ defineKey({ keymaps: 'global', states: ['normal', 'visual'] }, {
   'C-w k': 'windmove-up',
   'C-w l': 'windmove-right',
   'C-w =': 'balance-windows',
+  'C-w +': 'enlarge-window',
+  'C-w -': 'shrink-window',
+  'C-w >': 'enlarge-window-horizontally',
+  'C-w <': 'shrink-window-horizontally',
+  'C-w _': 'maximize-window-vertically',
+  'C-w |': 'maximize-window-horizontally',
   ']': { label: 'next' },
   '] b': 'next-buffer',
   '[': { label: 'previous' },

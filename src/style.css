@@ -1,22 +1,36 @@
 :root {
-  --bg: #1a1b26;
-  --bg-alt: #16161e;
-  --bg-hl: #292e42;
-  --bg-sel: #2f3549;
-  --fg: #c0caf5;
-  --fg-dim: #565f89;
-  --fg-muted: #737aa2;
-  --accent: #7aa2f7;
-  --accent-2: #bb9af7;
-  --match: #ff9e64;
-  --error: #f7768e;
-  --green: #9ece6a;
-  --yellow: #e0af68;
-  --cyan: #7dcfff;
-  --border: #101014;
+  /* Colors come from the active theme (src/themes/themes.js); these are Gruvbox Dark. */
+  --bg: #282828;
+  --bg-alt: #1d2021;
+  --bg-hl: #3c3836;
+  --bg-sel: #504945;
+  --fg: #ebdbb2;
+  --fg-dim: #7c6f64;
+  --fg-muted: #a89984;
+  --accent: #83a598;
+  --accent-2: #d3869b;
+  --match: #fe8019;
+  --error: #fb4934;
+  --green: #b8bb26;
+  --yellow: #fabd2f;
+  --cyan: #8ec07c;
+  --border: #1d2021;
+  --region: #504945;
+  --region-line: #3c3836;
+  --search: #665c54;
+  --syn-comment: #928374; --syn-keyword: #fb4934; --syn-preproc: #8ec07c; --syn-operator: #fe8019;
+  --syn-string: #b8bb26; --syn-string-special: #8ec07c; --syn-escape: #fe8019; --syn-constant: #d3869b;
+  --syn-function: #b8bb26; --syn-builtin: #fe8019; --syn-macro: #8ec07c; --syn-type: #fabd2f;
+  --syn-parameter: #83a598; --syn-property: #83a598; --syn-attribute: #8ec07c; --syn-tag: #fb4934;
+  --syn-label: #fabd2f; --syn-punctuation: #a89984;
+  --term-0: #282828; --term-1: #cc241d; --term-2: #98971a; --term-3: #d79921;
+  --term-4: #458588; --term-5: #b16286; --term-6: #689d6a; --term-7: #a89984;
+  --term-8: #928374; --term-9: #fb4934; --term-10: #b8bb26; --term-11: #fabd2f;
+  --term-12: #83a598; --term-13: #d3869b; --term-14: #8ec07c; --term-15: #ebdbb2;
   --font: "JetBrains Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
   --font-size: 13px;
   --line-height: 1.5;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -50,7 +64,12 @@ html, body {
 .split { display: flex; min-width: 0; min-height: 0; }
 .split-row { flex-direction: row; }
 .split-column { flex-direction: column; }
-.split-row > * + * { border-left: 1px solid var(--border); }
+.divider { flex: none; background: var(--border); z-index: 3; }
+.split-row > .divider { width: 3px; cursor: col-resize; }
+.split-column > .divider { height: 3px; cursor: row-resize; }
+.divider:hover { background: var(--accent); }
+body.resizing-col, body.resizing-col * { cursor: col-resize !important; }
+body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
 
 .window {
   display: flex;
@@ -273,82 +292,77 @@ body.helm-active #echo { display: none; }
 
 /* ---- vim ---- */
 
-.region { background: #364a82; }
-.line.region-line, .line.region-line .gutter { background: #2a3456; }
+.region { background: var(--region); }
+.line.region-line, .line.region-line .gutter { background: var(--region-line); }
 .line.region-line .region { background: transparent; }
-.search-match { background: #3d59a1; color: var(--fg); }
+.search-match { background: var(--search); color: var(--fg); }
 .search-current { background: var(--match); color: var(--bg); }
 .cursor-underline { color: inherit; background: transparent; border-bottom: 3px solid var(--cyan); }
 .cursor-underline.state-replace { border-bottom-color: var(--error); }
 
 /* ---- syntax (tree-sitter captures; base names first, specific ones after) ---- */
 
-.hl-comment { color: #565f89; font-style: italic; }
-.hl-keyword, .hl-conditional, .hl-repeat, .hl-preproc { color: #bb9af7; }
-.hl-keyword-return, .hl-keyword-function { color: #bb9af7; }
-.hl-keyword-operator { color: #89ddff; }
-.hl-string { color: #9ece6a; }
-.hl-string-special, .hl-string-regex { color: #b4f9f8; }
-.hl-string-special-key { color: #7aa2f7; }
-.hl-escape, .hl-string-escape { color: #89ddff; }
-.hl-number, .hl-boolean, .hl-float { color: #ff9e64; }
-.hl-constant { color: #ff9e64; }
-.hl-constant-builtin { color: #ff9e64; }
-.hl-function, .hl-method { color: #7aa2f7; }
-.hl-function-builtin { color: #2ac3de; }
-.hl-function-macro { color: #7dcfff; }
-.hl-constructor { color: #2ac3de; }
-.hl-type { color: #2ac3de; }
-.hl-type-builtin { color: #2ac3de; font-style: italic; }
+.hl-comment, .hl-comment-documentation { color: var(--syn-comment); font-style: italic; }
+.hl-keyword, .hl-conditional, .hl-repeat, .hl-keyword-return, .hl-keyword-function { color: var(--syn-keyword); }
+.hl-preproc { color: var(--syn-preproc); }
+.hl-keyword-operator, .hl-operator { color: var(--syn-operator); }
+.hl-string { color: var(--syn-string); }
+.hl-string-special, .hl-string-regex { color: var(--syn-string-special); }
+.hl-string-special-key { color: var(--syn-property); }
+.hl-escape, .hl-string-escape { color: var(--syn-escape); }
+.hl-number, .hl-boolean, .hl-float, .hl-constant, .hl-constant-builtin { color: var(--syn-constant); }
+.hl-function, .hl-method, .hl-function-method, .hl-method-call, .hl-function-call { color: var(--syn-function); }
+.hl-function-builtin { color: var(--syn-builtin); }
+.hl-function-macro { color: var(--syn-macro); }
+.hl-constructor { color: var(--syn-type); }
+.hl-type { color: var(--syn-type); }
+.hl-type-builtin { color: var(--syn-type); font-style: italic; }
 .hl-variable { color: var(--fg); }
-.hl-variable-builtin { color: #f7768e; }
-.hl-variable-parameter, .hl-parameter { color: #e0af68; }
-.hl-property, .hl-field { color: #73daca; }
-.hl-attribute { color: #bb9af7; }
-.hl-tag { color: #f7768e; }
+.hl-variable-builtin { color: var(--syn-builtin); }
+.hl-variable-parameter, .hl-parameter { color: var(--syn-parameter); }
+.hl-property, .hl-field { color: var(--syn-property); }
+.hl-attribute { color: var(--syn-attribute); }
+.hl-tag { color: var(--syn-tag); }
 .hl-tag-error { color: var(--error); text-decoration: underline wavy; }
-.hl-label { color: #7dcfff; }
-.hl-operator { color: #89ddff; }
-.hl-punctuation { color: #9aa5ce; }
-.hl-punctuation-special { color: #89ddff; }
-.hl-delimiter { color: #9aa5ce; }
+.hl-label { color: var(--syn-label); }
+.hl-punctuation, .hl-delimiter { color: var(--syn-punctuation); }
+.hl-punctuation-special { color: var(--syn-operator); }
 .hl-embedded { color: var(--fg); }
-.hl-comment-documentation { color: #5a638c; }
 
 /* ---- terminal ---- */
 
-.tfg-0 { color: #15161e; }
-.tfg-1 { color: #f7768e; }
-.tfg-2 { color: #9ece6a; }
-.tfg-3 { color: #e0af68; }
-.tfg-4 { color: #7aa2f7; }
-.tfg-5 { color: #bb9af7; }
-.tfg-6 { color: #7dcfff; }
-.tfg-7 { color: #a9b1d6; }
-.tfg-8 { color: #414868; }
-.tfg-9 { color: #ff899d; }
-.tfg-10 { color: #9fe044; }
-.tfg-11 { color: #faba4a; }
-.tfg-12 { color: #8db0ff; }
-.tfg-13 { color: #c7a9ff; }
-.tfg-14 { color: #a4daff; }
-.tfg-15 { color: #c0caf5; }
-.tbg-0 { background: #15161e; }
-.tbg-1 { background: #f7768e; }
-.tbg-2 { background: #9ece6a; }
-.tbg-3 { background: #e0af68; }
-.tbg-4 { background: #7aa2f7; }
-.tbg-5 { background: #bb9af7; }
-.tbg-6 { background: #7dcfff; }
-.tbg-7 { background: #a9b1d6; }
-.tbg-8 { background: #414868; }
-.tbg-9 { background: #ff899d; }
-.tbg-10 { background: #9fe044; }
-.tbg-11 { background: #faba4a; }
-.tbg-12 { background: #8db0ff; }
-.tbg-13 { background: #c7a9ff; }
-.tbg-14 { background: #a4daff; }
-.tbg-15 { background: #c0caf5; }
+.tfg-0 { color: var(--term-0); }
+.tfg-1 { color: var(--term-1); }
+.tfg-2 { color: var(--term-2); }
+.tfg-3 { color: var(--term-3); }
+.tfg-4 { color: var(--term-4); }
+.tfg-5 { color: var(--term-5); }
+.tfg-6 { color: var(--term-6); }
+.tfg-7 { color: var(--term-7); }
+.tfg-8 { color: var(--term-8); }
+.tfg-9 { color: var(--term-9); }
+.tfg-10 { color: var(--term-10); }
+.tfg-11 { color: var(--term-11); }
+.tfg-12 { color: var(--term-12); }
+.tfg-13 { color: var(--term-13); }
+.tfg-14 { color: var(--term-14); }
+.tfg-15 { color: var(--term-15); }
+.tbg-0 { background: var(--term-0); }
+.tbg-1 { background: var(--term-1); }
+.tbg-2 { background: var(--term-2); }
+.tbg-3 { background: var(--term-3); }
+.tbg-4 { background: var(--term-4); }
+.tbg-5 { background: var(--term-5); }
+.tbg-6 { background: var(--term-6); }
+.tbg-7 { background: var(--term-7); }
+.tbg-8 { background: var(--term-8); }
+.tbg-9 { background: var(--term-9); }
+.tbg-10 { background: var(--term-10); }
+.tbg-11 { background: var(--term-11); }
+.tbg-12 { background: var(--term-12); }
+.tbg-13 { background: var(--term-13); }
+.tbg-14 { background: var(--term-14); }
+.tbg-15 { background: var(--term-15); }
 .tfg-fg { color: var(--fg); }
 .tfg-bg { color: var(--bg); }
 .tbg-fg { background: var(--fg); }

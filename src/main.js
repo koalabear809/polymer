@@ -25,6 +25,7 @@ import './commands/default-keys.js';
 import './vim/index.js';
 import './syntax/index.js';
 import { reattachTerminals } from './terminal/term.js';
+import { restoreChosenTheme } from './themes/themes.js';
 
 const SCRATCH = `// Welcome to Polymer. This is *scratch*: JavaScript you can edit and evaluate.
 //
@@ -80,6 +81,7 @@ async function boot() {
     if (noInit) message('Skipped init.js (POLYMER_NO_INIT / -q)');
     else await loadInitFile();
     await restoreState();
+    restoreChosenTheme();
     startStateSaving();
     // Shells keep running in the backend across reloads (SPC q r); pick them back up.
     const n = await reattachTerminals();

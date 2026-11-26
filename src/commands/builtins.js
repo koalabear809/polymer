@@ -16,8 +16,9 @@ import {
   selectedWindow, setWindowBuffer, displayBuffer, splitWindow, deleteWindow,
   deleteOtherWindows, otherWindow, windowInDirection, selectWindow, balanceWindows,
   switchToPrevBuffer, replaceBufferInWindows, scrollWindow, windowBodyLines, scrollToEdge,
-  windowList,
+  windowList, resizeWindow, maximizeWindow,
 } from '../core/window.js';
+import { prefix } from '../vim/core.js';
 import { PolymerError } from '../core/errors.js';
 import { appInfo } from '../core/host.js';
 import { evalModule, describeLoadError } from '../core/loader.js';
@@ -208,6 +209,15 @@ defcommand('delete-window', { doc: 'Delete the selected window.' }, () => delete
 defcommand('delete-other-windows', { doc: 'Make the selected window fill the frame.' }, () => deleteOtherWindows(selectedWindow()));
 defcommand('other-window', { doc: 'Select the next window.' }, () => otherWindow(1));
 defcommand('balance-windows', { doc: 'Make all windows the same size.' }, () => balanceWindows());
+
+// Sizes take a count (5 C-w +); an explicit argument wins when called from code.
+const sizeCount = (n) => n ?? prefix.count ?? 1;
+defcommand('enlarge-window', { doc: 'Make the selected window [count] lines taller.' }, (n) => resizeWindow(selectedWindow(), sizeCount(n), false));
+defcommand('shrink-window', { doc: 'Make the selected window [count] lines shorter.' }, (n) => resizeWindow(selectedWindow(), -sizeCount(n), false));
+defcommand('enlarge-window-horizontally', { doc: 'Make the selected window [count] columns wider.' }, (n) => resizeWindow(selectedWindow(), sizeCount(n), true));
+defcommand('shrink-window-horizontally', { doc: 'Make the selected window [count] columns narrower.' }, (n) => resizeWindow(selectedWindow(), -sizeCount(n), true));
+defcommand('maximize-window-vertically', { doc: 'Make the selected window as tall as possible (C-w _).' }, () => maximizeWindow(selectedWindow(), false));
+defcommand('maximize-window-horizontally', { doc: 'Make the selected window as wide as possible (C-w |).' }, () => maximizeWindow(selectedWindow(), true));
 
 for (const dir of ['left', 'right', 'up', 'down']) {
   defcommand(`windmove-${dir}`, { doc: `Select the window ${dir === 'up' || dir === 'down' ? (dir === 'up' ? 'above' : 'below') : `to the ${dir}`}.` }, () => {

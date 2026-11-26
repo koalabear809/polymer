@@ -74,6 +74,24 @@ another window; `SPC b t` lists terminals. Built on `portable-pty` (ConPTY on Wi
 - Options: `term-shell`, `term-shell-args`; hooks: `term-mode-hook`, `term-exit-hook`,
   `term-bell-hook`. Add keys that work while the terminal has focus to `term-raw-map`.
 
+## Themes
+
+`SPC t t` (`load-theme`) picks a theme, previewing each as you move; the choice is
+remembered. Bundled: Gruvbox Dark (default), Gruvbox Dark Hard, Tokyo Night,
+Catppuccin Mocha, Nord, One Dark. A theme sets the CSS variables in `src/style.css`
+(UI, `--syn-*` syntax colors, `--term-0`..`--term-15`). In `init.js`:
+
+```js
+setq('theme', 'nord')                       // overrides the remembered choice
+defineTheme('my-theme', { base: 'gruvbox-dark', colors: { '--bg': '#1c1c1c' } })
+```
+
+## Windows
+
+Drag the divider between windows to resize them (double-click evens them out), or use
+`C-w +` `C-w -` `C-w >` `C-w <` with counts, `C-w _` / `C-w |` to maximize, `C-w =` to
+balance (also under `SPC w`).
+
 ## Layout
 
 ```
@@ -84,6 +102,7 @@ src/                  frontend (plain JS, no bundler)
   vim/                vim layer (motions, operators, text objects, ex, search)
   syntax/             tree-sitter integration
   terminal/           terminal buffers (frontend)
+  themes/             color themes
   grammars/           bundled tree-sitter grammars and highlight queries
   vendor/             vendored third-party modules (web-tree-sitter)
 src-tauri/            Rust backend (files, terminals)

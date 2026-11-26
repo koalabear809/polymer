@@ -19,6 +19,7 @@ import * as files from './files.js';
 import * as vim from '../vim/core.js';
 import * as treesit from '../syntax/treesit.js';
 import * as terminal from '../terminal/term.js';
+import * as themes from '../themes/themes.js';
 import * as vimEx from '../vim/ex.js';
 import * as vimRegisters from '../vim/registers.js';
 
@@ -86,6 +87,7 @@ export const api = {
   displayBuffer: windows.displayBuffer,
   splitWindow: windows.splitWindow,
   deleteWindow: windows.deleteWindow,
+  resizeWindow: windows.resizeWindow,
 
   // echo area
   message: echo.message,
@@ -136,6 +138,10 @@ export const api = {
   treesitTree: treesit.treesitTree,
   treesitNodeAt: treesit.nodeAt,
   treesitLanguageForBuffer: treesit.languageForBuffer,
+
+  // themes
+  defineTheme: themes.defineTheme,
+  loadTheme: (name) => registry.setq('theme', name, null),
 
   // terminals
   openTerminal: terminal.openTerminal,
