@@ -229,6 +229,15 @@ defineBufferSerializer('text', {
   },
 });
 
+defineBufferSerializer('dired', {
+  serialize: (b) => (b.dired ? { dir: b.dired.dir } : null),
+  restore: async (data) => {
+    if (!(await pathInfo(data.dir)).isDir) return null;
+    const { dired } = await import('../commands/dired.js');
+    return dired(data.dir, { display: false });
+  },
+});
+
 defineBufferSerializer('file', {
   serialize: (b) => (b.file ? { path: b.file } : null),
   restore: async (data) => {

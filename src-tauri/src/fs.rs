@@ -25,6 +25,7 @@ pub struct DirEntry {
     is_dir: bool,
     is_symlink: bool,
     size: u64,
+    mtime_ms: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -108,6 +109,7 @@ pub fn list_directory(path: String) -> Result<Vec<DirEntry>, String> {
             is_dir: meta.as_ref().map(|m| m.is_dir()).unwrap_or(false),
             is_symlink,
             size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
+            mtime_ms: meta.as_ref().and_then(mtime_ms),
         });
     }
     out.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
@@ -134,4 +136,78 @@ pub fn canonicalize_path(path: String) -> Result<String, String> {
     fs::canonicalize(&p)
         .map(|c| c.to_string_lossy().replace('\\', "/"))
         .map_err(|e| err(&p, e))
+}
+
+/// Delete a file, symlink or (with `recursive`) a directory tree.
+#[tauri::command]
+pub fn delete_path(path: String, recursive: bool) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    let meta = fs::symlink_metadata(&p).map_err(|e| err(&p, e))?;
+    if meta.is_dir() {
+        if recursive { fs::remove_dir_all(&p) } else { fs::remove_dir(&p) }.map_err(|e| err(&p, e))
+    } else {
+        fs::remove_file(&p).map_err(|e| err(&p, e))
+    }
+}
+
+/// Rename or move. Fails rather than overwrite an existing target.
+#[tauri::command]
+pub fn rename_path(from: String, to: String) -> Result<(), String> {
+    let (f, t) = (PathBuf::from(&from), PathBuf::from(&to));
+    if fs::symlink_metadata(&t).is_ok() {
+        return Err(format!("{} already exists", t.display()));
+    }
+    fs::rename(&f, &t).map_err(|e| err(&f, e))
+}
+
+fn copy_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
+    let meta = fs::symlink_metadata(from)?;
+    if meta.is_dir() {
+        fs::create_dir_all(to)?;
+        for entry in fs::read_dir(from)? {
+            let entry = entry?;
+            copy_recursive(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        fs::copy(from, to).map(|_| ())
+    }
+}
+
+/// Copy a file or a directory tree. Fails rather than overwrite an existing target.
+#[tauri::command]
+pub fn copy_path(from: String, to: String) -> Result<(), String> {
+    let (f, t) = (PathBuf::from(&from), PathBuf::from(&to));
+    if fs::symlink_metadata(&t).is_ok() {
+        return Err(format!("{} already exists", t.display()));
+    }
+    copy_recursive(&f, &t).map_err(|e| err(&f, e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_rename_delete_round_trip() {
+        let base = std::env::temp_dir().join(format!("polymer-fs-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("a/sub")).unwrap();
+        fs::write(base.join("a/sub/f.txt"), "hi").unwrap();
+        let s = |p: &str| base.join(p).to_string_lossy().to_string();
+        copy_path(s("a"), s("b")).unwrap();
+        assert_eq!(fs::read_to_string(base.join("b/sub/f.txt")).unwrap(), "hi");
+        assert!(copy_path(s("a"), s("b")).is_err(), "no overwrite");
+        rename_path(s("b"), s("c")).unwrap();
+        assert!(base.join("c/sub/f.txt").exists() && !base.join("b").exists());
+        assert!(rename_path(s("a"), s("c")).is_err(), "no overwrite");
+        assert!(delete_path(s("c"), false).is_err(), "non-empty dir needs recursive");
+        delete_path(s("c"), true).unwrap();
+        delete_path(s("a/sub/f.txt"), false).unwrap();
+        assert!(!base.join("c").exists() && !base.join("a/sub/f.txt").exists());
+        let listed = list_directory(s("a")).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].mtime_ms.is_some());
+        fs::remove_dir_all(&base).unwrap();
+    }
 }

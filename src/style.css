@@ -411,3 +411,13 @@ body.helm-active #echo { display: none; }
 .line.agent-output { color: var(--fg-muted); }
 .line.agent-info { color: var(--fg-dim); }
 .line.agent-error { color: var(--error); }
+
+/* ---- dired ---- */
+
+.dired-header { color: var(--accent); font-weight: bold; }
+.dired-directory { color: var(--accent); font-weight: bold; }
+.dired-file { color: var(--fg); }
+.dired-hidden { color: var(--fg-muted); }
+.dired-dim { color: var(--fg-dim); }
+.dired-marked { color: var(--yellow); font-weight: bold; }
+.dired-flagged { color: var(--error); font-weight: bold; text-decoration: line-through; }

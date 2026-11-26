@@ -10,7 +10,7 @@ import { message } from '../core/echo.js';
 import { PolymerError } from '../core/errors.js';
 import {
   expandFileName, abbreviateFileName, asDirectory, stripSlash, dirname,
-  listDirectory, findFileNoselect, saveBuffer, writeFile, revertBuffer,
+  listDirectory, findFileNoselect, saveBuffer, writeFile, revertBuffer, pathInfo,
 } from '../core/files.js';
 
 function humanSize(n) {
@@ -74,9 +74,6 @@ export function helmFindFiles({ prompt = 'Find file: ', initial, actions, newAct
           let matched;
           if (!pattern) {
             matched = items.map((i) => ({ ...i, positions: [] }));
-            if (dir !== '/' && !/^[A-Za-z]:\/$/.test(dir)) {
-              matched.unshift({ e: { name: '..', isDir: true, size: 0 }, label: '../', positions: [], parent: true });
-            }
           } else {
             const compiled = compileQuery(pattern);
             matched = items
@@ -89,7 +86,7 @@ export function helmFindFiles({ prompt = 'Find file: ', initial, actions, newAct
           }
           return matched.map((i) => ({
             label: i.label,
-            value: i.parent ? asDirectory(dirname(stripSlash(dir)) || '/') : dir + i.e.name + (i.e.isDir ? '/' : ''),
+            value: dir + i.e.name + (i.e.isDir ? '/' : ''),
             isDir: i.e.isDir,
             positions: i.positions,
             annotation: i.e.isDir ? '' : humanSize(i.e.size),
@@ -120,6 +117,16 @@ export function readFileName(prompt, opts = {}) {
 }
 
 export async function openFile(path, { otherWindow = false } = {}) {
+  // A directory opens as a listing.
+  if ((await pathInfo(expandFileName(path))).isDir) {
+    const { dired } = await import('./dired.js');
+    if (otherWindow) {
+      const b = await dired(path, { display: false });
+      displayBuffer(b, { otherWindow: true });
+      return b;
+    }
+    return dired(path);
+  }
   const buf = await findFileNoselect(path);
   if (otherWindow) displayBuffer(buf, { otherWindow: true });
   else {
@@ -134,9 +141,13 @@ async function copyPath(path) {
   message('Copied %s', path);
 }
 
-defcommand('find-file', { doc: 'Visit a file, choosing it with helm. RET on a directory enters it; C-l goes up.' }, () => helmFindFiles({
+defcommand('find-file', { doc: 'Visit a file, choosing it with helm. RET on a directory enters it; DEL at a "/" or C-l goes up. The "Open" action on a directory shows it in dired.' }, () => helmFindFiles({
   actions: {
     'Find file': (p) => openFile(p),
+    'Open directory in dired': async (p) => {
+      const { dired } = await import('./dired.js');
+      return dired(p.endsWith('/') ? p : dirname(p), { focus: p.endsWith('/') ? undefined : p.slice(dirname(p).length) });
+    },
     'Find file other window': (p) => openFile(p, { otherWindow: true }),
     'Copy path': copyPath,
   },
