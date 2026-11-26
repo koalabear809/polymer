@@ -15,6 +15,9 @@ import { focusInput } from './focus.js';
 defvar('mode-line-format', null, {
   doc: 'Function (window, buffer) => string for the mode line, or null for the default.',
 });
+defvar('mode-line-segments', [], {
+  doc: 'Functions (window, buffer) => string shown at the start of the default mode line (empty strings are skipped).',
+});
 
 let nextId = 1;
 let root = null;     // { type: 'leaf', window } | { type: 'split', dir: 'row'|'column', children, weights }
@@ -201,6 +204,62 @@ function findParent(node, target) {
     if (r) return r;
   }
   return null;
+}
+
+/**
+ * A snapshot of the window layout: splits with their sizes, and for each window its
+ * buffer, point, scroll position and whether it is selected. Buffers are live objects;
+ * use this in memory (perspectives serialize it themselves).
+ */
+export function windowConfiguration() {
+  const snap = (node) => {
+    if (node.type === 'leaf') {
+      const w = node.window;
+      return {
+        type: 'leaf',
+        buffer: w.buffer,
+        point: w === selected ? w.buffer.point.pos : w.point.pos,
+        scrollTop: w.scrollTop ?? 0,
+        selected: w === selected,
+        prevBuffers: [...w.prevBuffers],
+      };
+    }
+    return { type: 'split', dir: node.dir, weights: [...node.weights], children: node.children.map(snap) };
+  };
+  return root ? snap(root) : null;
+}
+
+/**
+ * Replace the window layout with a configuration from windowConfiguration(). Windows
+ * whose buffer is gone show `fallback` instead.
+ */
+export function setWindowConfiguration(config, fallback) {
+  if (!config) return;
+  for (const w of windowList()) w.point.detach();
+  let sel = null;
+  const build = (n) => {
+    if (n.type === 'leaf') {
+      const live = n.buffer?.live;
+      const buf = live ? n.buffer : fallback;
+      const w = new Window(buf);
+      w.point.set(live ? n.point : buf.point.pos);
+      w.scrollTop = live ? n.scrollTop ?? 0 : 0;
+      w.prevBuffers = (n.prevBuffers ?? []).filter((b) => b.live && b !== buf);
+      if (n.selected) sel = w;
+      return leaf(w);
+    }
+    const children = n.children.map(build);
+    return { type: 'split', dir: n.dir, weights: [...(n.weights ?? children.map(() => 1))], children };
+  };
+  root = build(config);
+  const target = sel ?? windowList()[0];
+  selected = target;
+  target.buffer.point.set(target.point.pos);
+  setBuffer(target.buffer);
+  bumpBuffer(target.buffer);
+  layoutDirty = true;
+  scheduleRedisplay();
+  runHooks('window-configuration-change-hook');
 }
 
 export function deleteOtherWindows(win = selected) {
@@ -480,9 +539,12 @@ function defaultModeLine(win, buf) {
   }
   let state = buf.state;
   if (state === 'visual') state = { line: 'visual-line', block: 'visual-block' }[buf.vim?.visual?.type] ?? 'visual';
+  const segments = getVarOr('mode-line-segments', [], buf)
+    .map((f) => { try { return f(win, buf); } catch { return ''; } })
+    .filter(Boolean);
   return {
     state,
-    left: `${flag} ${buf.name}`,
+    left: `${segments.length ? `${segments.join(' ')} ` : ''}${flag} ${buf.name}`,
     right: `${line + 1}:${col}  ${where}  (${[mode?.lighter ?? buf.mode, ...minors].join(' ')})`,
   };
 }

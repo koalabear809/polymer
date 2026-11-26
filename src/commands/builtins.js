@@ -19,6 +19,7 @@ import {
   windowList, resizeWindow, maximizeWindow,
 } from '../core/window.js';
 import { prefix } from '../vim/core.js';
+import { perspBufferList, currentPersp } from '../persp/persp.js';
 import { PolymerError } from '../core/errors.js';
 import { appInfo } from '../core/host.js';
 import { evalModule, describeLoadError } from '../core/loader.js';
@@ -136,16 +137,19 @@ function bufferCandidate(b) {
   return { label: b.name, value: b.name, annotation: [mode, shown].filter(Boolean).join('  ') };
 }
 
-defcommand('switch-to-buffer', { doc: 'Switch to a buffer chosen with helm, or create a new one.' }, async () => {
+defcommand('switch-to-buffer', { doc: 'Switch to a buffer chosen with helm, or create a new one. The current perspective\'s buffers come first.' }, async () => {
   const cur = currentBuffer();
   // Put the current buffer last so RET on an empty query goes to the previous buffer.
-  const bufs = [...bufferList().filter((b) => b !== cur), ...(cur ? [cur] : [])];
+  const mine = perspBufferList();
+  const bufs = [...mine.filter((b) => b !== cur), ...(cur && mine.includes(cur) ? [cur] : [])];
+  const others = bufferList().filter((b) => !mine.includes(b));
+  const persp = currentPersp();
   return helm({
     prompt: 'Switch to buffer: ',
     history: 'buffer-name-history',
     sources: [
       {
-        name: 'Buffers',
+        name: persp ? `Buffers [${persp.name}]` : 'Buffers',
         candidates: bufs.map(bufferCandidate),
         actions: {
           'Switch to buffer': (n) => setWindowBuffer(selectedWindow(), n),
@@ -153,6 +157,15 @@ defcommand('switch-to-buffer', { doc: 'Switch to a buffer chosen with helm, or c
           'Kill buffer': (n) => killBufferAsking(n),
         },
         preview: (n) => setWindowBuffer(selectedWindow(), n),
+      },
+      {
+        name: 'Other perspectives',
+        candidates: others.map(bufferCandidate),
+        actions: {
+          'Switch to buffer (adds it here)': (n) => setWindowBuffer(selectedWindow(), n),
+          'Switch to buffer in other window': (n) => displayBuffer(n, { otherWindow: true }),
+          'Kill buffer': (n) => killBufferAsking(n),
+        },
       },
       {
         name: 'Create buffer',
@@ -187,7 +200,7 @@ defcommand('previous-buffer', { doc: 'Show the previous buffer in the selected w
 
 defcommand('next-buffer', { doc: 'Show the least recently used buffer in the selected window.' }, () => {
   const cur = currentBuffer();
-  const list = bufferList().filter((b) => b !== cur);
+  const list = perspBufferList().filter((b) => b !== cur);
   if (!list.length) return message('No next buffer');
   setWindowBuffer(selectedWindow(), list.at(-1));
 });

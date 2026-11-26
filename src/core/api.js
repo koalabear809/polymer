@@ -20,6 +20,7 @@ import * as vim from '../vim/core.js';
 import * as treesit from '../syntax/treesit.js';
 import * as terminal from '../terminal/term.js';
 import * as themes from '../themes/themes.js';
+import * as persp from '../persp/persp.js';
 import * as vimEx from '../vim/ex.js';
 import * as vimRegisters from '../vim/registers.js';
 
@@ -142,6 +143,13 @@ export const api = {
   // themes
   defineTheme: themes.defineTheme,
   loadTheme: (name) => registry.setq('theme', name, null),
+
+  // perspectives
+  perspSwitch: persp.perspSwitch,
+  perspNames: persp.perspNames,
+  currentPersp: persp.currentPersp,
+  perspBufferList: persp.perspBufferList,
+  defineBufferSerializer: persp.defineBufferSerializer,
 
   // terminals
   openTerminal: terminal.openTerminal,

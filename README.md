@@ -74,6 +74,21 @@ another window; `SPC b t` lists terminals. Built on `portable-pty` (ConPTY on Wi
 - Options: `term-shell`, `term-shell-args`; hooks: `term-mode-hook`, `term-exit-hook`,
   `term-bell-hook`. Add keys that work while the terminal has focus to `term-raw-map`.
 
+## Perspectives
+
+Named workspaces with their own buffer list and window layout (like perspective.el).
+You start in `main`; the mode line shows `[name]` once there are several.
+
+- `SPC TAB TAB` switch (type a new name to create), `SPC TAB n` new, `SPC TAB d` delete
+  (also kills buffers only it had), `SPC TAB r` rename, `SPC TAB 1`..`9`, `SPC TAB [` `]`
+- `SPC TAB a` / `x` add or remove a buffer. `SPC b b` shows this perspective's buffers
+  first and the rest under "Other perspectives".
+- `SPC TAB s` / `l` save or load the current perspective; `SPC TAB S` / `L` a whole
+  session; `SPC TAB R` loads the session saved automatically on quit. Files go to
+  `var/perspectives/`. File buffers keep their path and cursor, terminals their directory
+  (a fresh shell starts there), text buffers like `*scratch*` their contents.
+- Packages can save their own buffers with `defineBufferSerializer(kind, { serialize, restore })`.
+
 ## Themes
 
 `SPC t t` (`load-theme`) picks a theme, previewing each as you move; the choice is
@@ -103,6 +118,7 @@ src/                  frontend (plain JS, no bundler)
   syntax/             tree-sitter integration
   terminal/           terminal buffers (frontend)
   themes/             color themes
+  persp/              perspectives
   grammars/           bundled tree-sitter grammars and highlight queries
   vendor/             vendored third-party modules (web-tree-sitter)
 src-tauri/            Rust backend (files, terminals)

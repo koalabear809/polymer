@@ -4,7 +4,7 @@
 //   defineExCommand('hello', 'he', ({ args }) => message('hello %s', args))
 // The second argument is the shortest accepted abbreviation.
 
-import { defcommand, getVarOr, setq, setLocal, call, fboundp, boundp } from '../core/registry.js';
+import { defcommand, getVarOr, setq, setLocal, call, fboundp, boundp, runHooksAsync } from '../core/registry.js';
 import { readString, yesOrNo } from '../core/helm/helm.js';
 import { message } from '../core/echo.js';
 import { PolymerError } from '../core/errors.js';
@@ -179,6 +179,7 @@ async function quitApp(force) {
     if (dirty.length) throw userError(`No write since last change for ${dirty.map((d) => d.name).join(', ')} (add ! to override)`);
   }
   if (!isTauri) throw userError('Not running in the app');
+  await runHooksAsync('kill-polymer-hook');
   try { await saveState(); } catch (e) { console.warn('polymer: saving state failed:', e); }
   await invoke('quit_app');
 }

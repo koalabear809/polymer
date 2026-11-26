@@ -26,6 +26,7 @@ import './vim/index.js';
 import './syntax/index.js';
 import { reattachTerminals } from './terminal/term.js';
 import { restoreChosenTheme } from './themes/themes.js';
+import { initPerspectives } from './persp/persp.js';
 
 const SCRATCH = `// Welcome to Polymer. This is *scratch*: JavaScript you can edit and evaluate.
 //
@@ -62,6 +63,7 @@ async function boot() {
   scratch.point.set(scratch.lineStart(scratch.lineCount - 2));
 
   initWindows(document.getElementById('windows'), scratch);
+  initPerspectives();
   attachInput(document.getElementById('input'));
   installKeyHandler();
 

@@ -236,7 +236,7 @@ addHook('kill-buffer-hook', function termKillSession(b) {
 // ---------------------------------------------------------------------------
 // Commands
 
-/** Start a terminal. Options: { command, args, cwd, name, otherWindow }. Returns the buffer. */
+/** Start a terminal. Options: { command, args, cwd, name, otherWindow, display = true }. Returns the buffer. */
 export async function openTerminal(opts = {}) {
   if (!isTauri) throw new PolymerError('user-error', 'Terminals need the app (not a plain browser)');
   const win = selectedWindow();
@@ -257,8 +257,10 @@ export async function openTerminal(opts = {}) {
   setupBuffer(b, id);
   b.term.rows = rows;
   b.term.cols = cols;
+  b.term.spawn = { command: opts.command ?? null, args: opts.args ?? null }; // for saving (perspectives)
   if (cwd) setLocal('default-directory', cwd, b);
-  if (opts.otherWindow) displayBuffer(b, { otherWindow: true });
+  if (opts.display === false) { /* restored in the background (perspectives) */ }
+  else if (opts.otherWindow) displayBuffer(b, { otherWindow: true });
   else setWindowBuffer(selectedWindow(), b);
   runHooks('term-mode-hook', b);
   return b;
