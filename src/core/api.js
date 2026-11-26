@@ -21,6 +21,7 @@ import * as treesit from '../syntax/treesit.js';
 import * as terminal from '../terminal/term.js';
 import * as themes from '../themes/themes.js';
 import * as persp from '../persp/persp.js';
+import * as git from '../git/git.js';
 import * as vimEx from '../vim/ex.js';
 import * as vimRegisters from '../vim/registers.js';
 
@@ -150,6 +151,11 @@ export const api = {
   currentPersp: persp.currentPersp,
   perspBufferList: persp.perspBufferList,
   defineBufferSerializer: persp.defineBufferSerializer,
+
+  // git and processes
+  runGit: git.runGit,
+  gitRepoRoot: git.repoRoot,
+  runProcess: (program, args = [], opts = {}) => host.invoke('run_process', { options: { program, args, ...opts } }),
 
   // terminals
   openTerminal: terminal.openTerminal,

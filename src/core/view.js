@@ -127,7 +127,11 @@ function lineDecorations(buf, line, start, text) {
   }
   for (const d of [...buf.decorators, ...globalDecorators]) {
     try {
-      for (const x of d(buf, line, start, text) ?? []) decos.push({ priority: 0, ...x });
+      for (const x of d(buf, line, start, text) ?? []) {
+        // { lineFace } styles the whole line (full width), like an overlay's lineFace.
+        if (x.lineFace) lineFaces.push(x.lineFace);
+        else decos.push({ priority: 0, ...x });
+      }
     } catch (e) {
       console.error('decorator failed:', e);
     }

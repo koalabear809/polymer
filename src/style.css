@@ -372,3 +372,22 @@ body.helm-active #echo { display: none; }
 .term-underline { text-decoration: underline; }
 .term-strike { text-decoration: line-through; }
 .term-dim { opacity: 0.6; }
+
+/* ---- git ---- */
+
+.git-section { color: var(--accent-2); font-weight: bold; }
+.git-branch { color: var(--accent); font-weight: bold; }
+.git-remote { color: var(--green); }
+.git-hash { color: var(--fg-muted); }
+.git-refs { color: var(--yellow); }
+.git-graph { color: var(--accent-2); }
+.git-dim { color: var(--fg-dim); }
+.git-file { color: var(--fg); }
+.git-file-status { color: var(--fg-muted); }
+.git-status-A { color: var(--green); }
+.git-status-D { color: var(--error); }
+.git-status-R, .git-status-C { color: var(--accent); }
+.line.git-hunk-header, .line.git-hunk-header .gutter { background: var(--bg-hl); color: var(--accent); }
+.line.git-diff-add { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
+.line.git-diff-del { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
+.line.git-diff-file { color: var(--fg); font-weight: bold; }

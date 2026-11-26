@@ -89,6 +89,22 @@ You start in `main`; the mode line shows `[name]` once there are several.
   (a fresh shell starts there), text buffers like `*scratch*` their contents.
 - Packages can save their own buffers with `defineBufferSerializer(kind, { serialize, restore })`.
 
+## Git
+
+`SPC g g` opens a magit-style status buffer for the current buffer's repository. It's
+plain text, so vim motions and search work; commands act on the line at point.
+
+- `TAB` expand a file's diff (or collapse a section), `RET` open the file at that line
+  (or show a commit/stash), `g j` / `g k` (or `C-j` / `C-k`) jump between items
+- `s` / `u` / `x` stage, unstage, discard the section, file or **hunk** at point;
+  `S` / `U` stage or unstage everything; `g r` refresh; `$` the git process log
+- Menus (pause for which-key): `c` commit (`c c`, `c a` amend, `c e` extend),
+  `P` push, `F` pull, `f` fetch, `b` branch (`b b` checkout, `b c` create, `b k` delete),
+  `l` log, `z` stash (`z z`, `z p`, `z a`, `z k`)
+- The commit buffer: `C-c C-c` or `ZZ` commits, `C-c C-k` or `ZQ` cancels
+- From any file: `SPC g S` / `SPC g U` stage or unstage it, `SPC g L` its history,
+  `SPC g l` the log, `SPC g c` commit, `SPC g b` checkout, `SPC g p` push
+
 ## Themes
 
 `SPC t t` (`load-theme`) picks a theme, previewing each as you move; the choice is
@@ -119,9 +135,10 @@ src/                  frontend (plain JS, no bundler)
   terminal/           terminal buffers (frontend)
   themes/             color themes
   persp/              perspectives
+  git/                git interface
   grammars/           bundled tree-sitter grammars and highlight queries
   vendor/             vendored third-party modules (web-tree-sitter)
-src-tauri/            Rust backend (files, terminals)
+src-tauri/            Rust backend (files, processes, terminals)
 ```
 
 ## Trying it out

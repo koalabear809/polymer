@@ -1,4 +1,5 @@
 mod fs;
+mod process;
 mod terminal;
 
 use serde::Serialize;
@@ -57,6 +58,7 @@ pub fn run() {
             fs::path_info,
             fs::make_directory,
             fs::canonicalize_path,
+            process::run_process,
             terminal::term_spawn,
             terminal::term_write,
             terminal::term_resize,

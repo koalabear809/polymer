@@ -27,6 +27,7 @@ import './syntax/index.js';
 import { reattachTerminals } from './terminal/term.js';
 import { restoreChosenTheme } from './themes/themes.js';
 import { initPerspectives } from './persp/persp.js';
+import './git/index.js';
 
 const SCRATCH = `// Welcome to Polymer. This is *scratch*: JavaScript you can edit and evaluate.
 //
