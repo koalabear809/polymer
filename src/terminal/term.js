@@ -300,7 +300,7 @@ export async function openTerminal(opts = {}) {
 /** Re-attach to sessions still running in the backend (after a webview reload). */
 export async function reattachTerminals() {
   if (!isTauri) return 0;
-  const list = await invoke('term_list');
+  const list = (await invoke('term_list')) ?? [];
   for (const info of list) {
     if (sessions.has(info.id)) continue;
     const b = getBufferCreate(generateNewBufferName(getVarOr('term-buffer-name', '*terminal*')));

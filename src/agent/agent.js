@@ -555,7 +555,7 @@ addHook('kill-buffer-hook', function agentStop(b) {
 /** Kill agent processes left over from before a webview reload (their state is gone). */
 export async function killOrphanAgents() {
   if (!isTauri) return;
-  for (const p of await invoke('proc_list')) {
+  for (const p of (await invoke('proc_list')) ?? []) {
     if (p.tag === 'acp' || p.tag === 'acp-terminal') await invoke('proc_kill', { id: p.id }).catch(() => {});
   }
 }

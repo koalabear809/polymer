@@ -122,6 +122,23 @@ a terminal and `/login` once). Any ACP agent can be added with `defineAgent`.
   whose output shows under the tool call. Permission requests appear as a helm prompt.
 - From any file: `SPC a f` adds `@file` (and the selected lines) to the agent's input.
 
+## MCP server (agents controlling the editor)
+
+Polymer runs an MCP server on `127.0.0.1` (streamable HTTP, random bearer token). Agents
+started with `SPC a a` are connected to it automatically. Tools:
+
+| Tool | |
+|---|---|
+| `list_buffers`, `get_buffer_text` | open buffers and their text, including unsaved edits |
+| `get_editor_state` | current buffer, file, cursor, and the selection |
+| `open_file` | show a file (at a line) in another window |
+| `show_message` | a message in the echo area |
+| `list_commands`, `run_command` | run commands in `mcp-commands` or defined with `{ mcp: true }` |
+| `eval_js` | evaluate JavaScript in the editor; asks you each time (`mcp-allow-eval`) |
+
+Add tools with `defineMcpTool(name, { description, inputSchema, handler })`.
+`SPC h M` shows the URL and token for connecting other MCP clients.
+
 ## Themes
 
 `SPC t t` (`load-theme`) picks a theme, previewing each as you move; the choice is
@@ -154,9 +171,10 @@ src/                  frontend (plain JS, no bundler)
   persp/              perspectives
   git/                git interface
   agent/              ACP client and agent buffers
+  mcp/                the editor's MCP tools
   grammars/           bundled tree-sitter grammars and highlight queries
   vendor/             vendored third-party modules (web-tree-sitter)
-src-tauri/            Rust backend (files, processes, terminals)
+src-tauri/            Rust backend (files, processes, terminals, MCP server)
 ```
 
 ## Trying it out

@@ -1,4 +1,5 @@
 mod fs;
+mod mcp;
 mod process;
 mod terminal;
 
@@ -50,6 +51,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(terminal::Terminals::default())
         .manage(process::Processes::default())
+        .manage(mcp::McpServer::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
             quit_app,
@@ -61,6 +63,8 @@ pub fn run() {
             fs::make_directory,
             fs::canonicalize_path,
             process::run_process,
+            mcp::mcp_start,
+            mcp::mcp_respond,
             process::proc_spawn,
             process::proc_write,
             process::proc_kill,

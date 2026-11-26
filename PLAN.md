@@ -111,7 +111,7 @@ helm({
 
 | Phase | Deliverable |
 |---|---|
-| | *Done: 0, 1a–c, 2, 3, 4, 5, 6 (see git log)* |
+| | *Done: all phases, 0–7 (see git log)* |
 | **0** | Tauri skeleton (no bundler); registry (commands, vars, hooks, advice); window split tree; helm engine; `M-x`, describe-command/variable; key dispatcher + which-key; `eval-expression`; echo area + `*Messages*` |
 | **1a** | Text storage, markers, overlays, rendering, input (incl. IME), undo; file buffers; find-file, save, switch-buffer |
 | **1b** | Vim layer: motions, operators, text objects, counts, registers, dot-repeat, visual, `:` commands |

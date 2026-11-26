@@ -74,6 +74,7 @@ defineKey({ keymaps: 'global', states: ['normal', 'visual'], prefix: 'SPC' }, {
   'h e': 'view-echo-area-messages',
   'h V': 'polymer-version',
   'h p': 'list-packages',
+  'h M': 'mcp-connection-info',
   'h r': { label: 'reload' },
   'h r r': 'reload-init-file',
   'h r p': 'reload-package',

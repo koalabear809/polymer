@@ -30,6 +30,7 @@ import { initPerspectives } from './persp/persp.js';
 import './git/index.js';
 import './agent/index.js';
 import { killOrphanAgents } from './agent/agent.js';
+import { startMcpServer } from './mcp/mcp.js';
 
 const SCRATCH = `// Welcome to Polymer. This is *scratch*: JavaScript you can edit and evaluate.
 //
@@ -78,23 +79,30 @@ async function boot() {
   window.__polymerBooted = true;
   message('Polymer ready. SPC for the leader key, M-x for commands.');
 
-  // Files and the user's configuration. A broken init.js is reported but doesn't stop
-  // startup; set POLYMER_NO_INIT=1 (or pass -q) to skip it entirely.
-  try {
-    await initFiles();
+  // Files and the user's configuration. Each step reports its own failure so one broken
+  // step (a bad init.js, a missing tool) doesn't stop the rest. Set POLYMER_NO_INIT=1
+  // (or pass -q) to skip init.js entirely.
+  const step = async (name, fn) => {
+    try { await fn(); } catch (e) { e.message = `${name}: ${e.message}`; reportError(e); }
+  };
+  await step('files', () => initFiles());
+  await step('init', async () => {
     const { noInit } = await initLoader();
     if (noInit) message('Skipped init.js (POLYMER_NO_INIT / -q)');
     else await loadInitFile();
+  });
+  await step('saved state', async () => {
     await restoreState();
     restoreChosenTheme();
     startStateSaving();
-    // Shells keep running in the backend across reloads (SPC q r); pick them back up.
-    await killOrphanAgents(); // agent sessions don't survive a reload; their processes would linger
+  });
+  await step('agents', () => killOrphanAgents()); // agent sessions don't survive a reload
+  await step('MCP server', () => startMcpServer());
+  // Shells keep running in the backend across reloads (SPC q r); pick them back up.
+  await step('terminals', async () => {
     const n = await reattachTerminals();
     if (n) message('Re-attached %d terminal%s (SPC b t)', n, n === 1 ? '' : 's');
-  } catch (e) {
-    reportError(e);
-  }
+  });
 
   runHooks('after-init-hook');
 }

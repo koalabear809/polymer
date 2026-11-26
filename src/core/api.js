@@ -23,6 +23,7 @@ import * as themes from '../themes/themes.js';
 import * as persp from '../persp/persp.js';
 import * as git from '../git/git.js';
 import * as agent from '../agent/agent.js';
+import * as mcp from '../mcp/mcp.js';
 import * as vimEx from '../vim/ex.js';
 import * as vimRegisters from '../vim/registers.js';
 
@@ -163,6 +164,10 @@ export const api = {
   openAgent: agent.openAgent,
   agentSend: agent.agentSend,
   addAgentMcpProvider: agent.addAgentMcpProvider,
+
+  // MCP
+  defineMcpTool: mcp.defineMcpTool,
+  mcpInfo: mcp.mcpInfo,
 
   // terminals
   openTerminal: terminal.openTerminal,
