@@ -421,3 +421,15 @@ body.helm-active #echo { display: none; }
 .dired-dim { color: var(--fg-dim); }
 .dired-marked { color: var(--yellow); font-weight: bold; }
 .dired-flagged { color: var(--error); font-weight: bold; text-decoration: line-through; }
+
+/* ---- custom views (images) ---- */
+
+.custom-view { position: absolute; inset: 0; overflow: auto; display: flex; }
+.image-stage {
+  position: relative;
+  margin: auto; /* centered when smaller than the window, scrollable when larger */
+  flex: none;
+  background: repeating-conic-gradient(var(--bg-hl) 0 25%, var(--bg-alt) 0 50%) 0 0 / 16px 16px;
+}
+.image-stage img { position: absolute; left: 50%; top: 50%; transform-origin: center; user-select: none; }
+.image-error { margin: auto; padding: 24px; color: var(--error); }

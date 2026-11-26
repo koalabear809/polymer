@@ -127,6 +127,25 @@ export function setAutoMode(buf) {
 }
 
 // ---------------------------------------------------------------------------
+// File handlers: open some files as something other than text (images, ...)
+
+const fileHandlers = []; // { name, match(path), open(path) -> Promise<Buffer> }
+
+/**
+ * Open matching files with `open(path)` instead of reading them as text. Later
+ * definitions win.
+ *   defineFileHandler('image', { match: (p) => /\.png$/i.test(p), open: (p) => openImage(p) })
+ */
+export function defineFileHandler(name, { match, open }) {
+  const i = fileHandlers.findIndex((h) => h.name === name);
+  if (i >= 0) fileHandlers.splice(i, 1);
+  fileHandlers.unshift({ name, match, open });
+  return name;
+}
+
+export const fileHandlerFor = (path) => fileHandlers.find((h) => h.match(path)) ?? null;
+
+// ---------------------------------------------------------------------------
 // Visiting files
 
 function recordRecent(path) {
@@ -142,6 +161,13 @@ export async function findFileNoselect(path) {
   if (existing) return existing;
   const info = await pathInfo(path);
   if (info.isDir) throw new PolymerError('file-error', `${abbreviateFileName(path)} is a directory`);
+  const handler = info.exists && fileHandlerFor(path);
+  if (handler) {
+    const hb = await handler.open(path);
+    recordRecent(path);
+    runHooks('find-file-hook', hb);
+    return hb;
+  }
   const buf = getBufferCreate(generateNewBufferName(basename(path)));
   buf.file = path;
   if (info.exists) {
@@ -209,6 +235,7 @@ export async function writeFile(buf, path, opts) {
 /** Re-read the file, discarding changes. Keeps point on the same line where possible. */
 export async function revertBuffer(buf = currentBuffer()) {
   if (!buf.file) throw new PolymerError('error', `Buffer ${buf.name} is not visiting a file`);
+  if (buf.revertFunction) return buf.revertFunction(buf); // non-text buffers (images) reload themselves
   const { line, col } = buf.posAt(buf.point.pos);
   const contents = await readTextFile(buf.file);
   buf.setText(contents.text);

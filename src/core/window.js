@@ -542,10 +542,12 @@ function defaultModeLine(win, buf) {
   const segments = getVarOr('mode-line-segments', [], buf)
     .map((f) => { try { return f(win, buf); } catch { return ''; } })
     .filter(Boolean);
+  // Buffers that aren't text describe themselves instead of line:column.
+  const position = buf.modeLineInfo ? buf.modeLineInfo(win) : `${line + 1}:${col}  ${where}`;
   return {
     state,
     left: `${segments.length ? `${segments.join(' ')} ` : ''}${flag} ${buf.name}`,
-    right: `${line + 1}:${col}  ${where}  (${[mode?.lighter ?? buf.mode, ...minors].join(' ')})`,
+    right: `${position}  (${[mode?.lighter ?? buf.mode, ...minors].join(' ')})`,
   };
 }
 

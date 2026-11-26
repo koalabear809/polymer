@@ -322,9 +322,44 @@ function setScroll(win, top, left) {
  * display the cursor at; returns a (possibly adjusted) point if the user scrolled the
  * cursor out of view.
  */
+/**
+ * Buffers that aren't text (images, ...) set `buf.customRenderer(win, el, selected)`:
+ * the window hides its text layer and gives the renderer its own element to fill.
+ */
+function renderCustom(win, selected) {
+  const buf = win.buffer;
+  const body = win.bodyEl;
+  if (!win.customEl || win.customFor !== buf) {
+    win.customEl?.remove();
+    win.customEl = document.createElement('div');
+    win.customEl.className = 'custom-view';
+    body.appendChild(win.customEl);
+    win.customFor = buf;
+    win.customState = null;
+  }
+  for (const el of [win.spacerEl, win.linesEl, win.cursorEl]) el.style.display = 'none';
+  body.style.overflow = 'hidden';
+  buf.customRenderer(win, win.customEl, selected);
+  win.renderedBuffer = buf;
+}
+
+function leaveCustom(win) {
+  win.customEl.remove();
+  win.customEl = null;
+  win.customFor = null;
+  for (const el of [win.spacerEl, win.linesEl, win.cursorEl]) el.style.display = '';
+  win.bodyEl.style.overflow = '';
+  win.renderKey = null;
+}
+
 export function renderView(win, selected, point) {
   const buf = win.buffer;
   const body = win.bodyEl;
+  if (buf.customRenderer) {
+    renderCustom(win, selected);
+    return point;
+  }
+  if (win.customEl) leaveCustom(win);
   const { cw, lh } = viewMetrics();
   const lineCount = buf.lineCount;
   const tabWidth = getVarOr('tab-width', 4, buf);

@@ -20,6 +20,7 @@ import './commands/help.js';
 import './commands/editing.js';
 import './commands/files.js';
 import './commands/dired.js';
+import './commands/image.js';
 import './commands/language-modes.js';
 import { loadInitFile } from './commands/config.js';
 import './commands/default-keys.js';

@@ -200,14 +200,15 @@ function sliceLines(text, line, limit) {
 export async function readForAgent({ path, line, limit }) {
   const p = path.replace(/\\/g, '/');
   const b = findBufferVisiting(p);
-  const text = b ? b.getText() : (await readTextFile(p)).text;
+  // Only text buffers stand in for their file (an image buffer has no text).
+  const text = b && !b.binary ? b.getText() : (await readTextFile(p)).text;
   return sliceLines(text, line, limit);
 }
 
 export async function writeForAgent({ path, content }) {
   const p = path.replace(/\\/g, '/');
   const b = findBufferVisiting(p);
-  if (b) {
+  if (b && !b.binary) {
     // Through the buffer: undoable, keeps the cursor's line, then saved.
     // Its own undo step, separate from whatever you were typing.
     const { line, col } = b.posAt(b.point.pos);

@@ -139,6 +139,7 @@ defineMcpTool('get_buffer_text', {
   inputSchema: schema({ buffer: str('Buffer name'), path: str('File path of a buffer visiting it'), startLine: int('First line (1-based)'), endLine: int('Last line (inclusive)') }),
   handler: (args) => {
     const b = findBuffer(args);
+    if (b.binary) throw new Error(`${b.name} is not a text buffer (${b.mode})`);
     let text = b.getText();
     if (args.startLine || args.endLine) {
       const lines = text.split('\n');

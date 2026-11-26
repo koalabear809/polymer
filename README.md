@@ -199,6 +199,10 @@ src-tauri/            Rust backend (files, processes, terminals, MCP server)
   `U` mark, `d` flags and `x` deletes flagged, `D` delete, `R` rename/move, `C` copy,
   `o` / `O` new file / directory, `g r` refresh, `g h` hidden files. With a visual
   selection (`V`), `m` `u` `d` `D` `R` `C` act on every selected entry.
+- **Images** (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO, SVG) open as pictures from find-file,
+  dired or `:e`: `+`/`-` zoom, `0` fit, `1` actual size, `r`/`R` rotate, `n`/`p` next or
+  previous image in the directory, `h j k l` pan (wheel scrolls, `C-wheel` zooms), `g r`
+  reload. Other file types can open their own way with `defineFileHandler`.
 - `SPC f f` find file: `RET` opens a file, or a directory in dired; `TAB` enters a
   directory (on a file it shows actions); `C-l` or `DEL` at a `/` goes up;
   `SPC f s` / `Cmd-S` save, `SPC f S` save as, `SPC f r` recent files, `SPC b r` revert
