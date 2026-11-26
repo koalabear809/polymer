@@ -195,11 +195,12 @@ src-tauri/            Rust backend (files, processes, terminals, MCP server)
   `:sort`, `:set ts=2 rnu`, `:reg`, `:marks`, `:js 1 + 2`, `:mode rust`
 - `SPC f d` opens **dired** on the current file's directory (cursor on the file); opening any
   directory does too. It's plain text, so all vim motions and `/` search work. `RET` opens
-  a file in this window (or moves into a directory), `DEL` goes up a directory, `m` / `u` /
+  a file in this window (or moves into a directory), `-` or `DEL` goes up a directory, `m` / `u` /
   `U` mark, `d` flags and `x` deletes flagged, `D` delete, `R` rename/move, `C` copy,
   `o` / `O` new file / directory, `g r` refresh, `g h` hidden files. With a visual
   selection (`V`), `m` `u` `d` `D` `R` `C` act on every selected entry.
-- `SPC f f` find file (`RET` enters a directory, `C-l` or `DEL` at a `/` goes up),
+- `SPC f f` find file: `RET` opens a file, or a directory in dired; `TAB` enters a
+  directory (on a file it shows actions); `C-l` or `DEL` at a `/` goes up;
   `SPC f s` / `Cmd-S` save, `SPC f S` save as, `SPC f r` recent files, `SPC b r` revert
 - `M-x` / `SPC :` run a command; `SPC e l` / `SPC e b` evaluate line / buffer as JavaScript
 - `SPC h f` / `SPC h v` / `SPC h k` describe a function / variable / key

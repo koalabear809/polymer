@@ -1,8 +1,8 @@
 // Dired: a buffer listing a directory.
 //
 // The listing is plain text, so every vim motion and search works as usual. Dired's keys
-// avoid motion keys: RET opens (a file replaces the listing in this window; a directory
-// moves the listing there), DEL goes up a directory, m/u/U mark, d flags for deletion and
+// avoid motion keys, except - (up a directory; k covers moving up): RET opens (a file
+// replaces the listing in this window; a directory moves the listing there), - or DEL go up, m/u/U mark, d flags for deletion and
 // x deletes flagged, D deletes, R renames/moves, C copies, o / O create a file /
 // directory, g r refreshes, g h toggles hidden files. With a visual selection (V), m, u,
 // d, D, R and C act on every selected entry.
@@ -28,7 +28,7 @@ const userError = (msg) => new PolymerError('user-error', msg);
 defineMajorMode('dired-mode', {
   parent: 'special-mode',
   lighter: 'Dired',
-  doc: 'A directory listing. RET open, DEL up a directory, m/u/U mark, d flag and x delete, D delete, R rename, C copy, o/O new file/directory, g r refresh, g h hidden files. Vim motions work as usual; with a visual selection the commands act on every selected entry.',
+  doc: 'A directory listing. RET open, - or DEL up a directory, m/u/U mark, d flag and x delete, D delete, R rename, C copy, o/O new file/directory, g r refresh, g h hidden files. Vim motions work as usual; with a visual selection the commands act on every selected entry.',
 });
 
 // ---------------------------------------------------------------------------
@@ -196,7 +196,7 @@ defcommand('dired-find-file', { doc: 'Open the entry at point: a file replaces t
   return openFile(pathOf(b, e));
 });
 
-defcommand('dired-up-directory', { doc: 'Go to the parent directory, with the cursor on the one you came from (DEL).' }, () => {
+defcommand('dired-up-directory', { doc: 'Go to the parent directory, with the cursor on the one you came from (- or DEL).' }, () => {
   const b = requireDired();
   const here = stripSlash(b.dired.dir);
   const parent = dirname(here);
@@ -342,11 +342,12 @@ addHook('after-save-hook', function diredRefreshAfterSave(buf) {
 });
 
 // ---------------------------------------------------------------------------
-// Keys: none of these shadow a vim motion.
+// Keys: none of these shadow a vim motion except - (up a directory).
 
 defineKey({ keymaps: 'dired-mode-map', states: 'normal' }, {
   'RET': 'dired-find-file',
   'DEL': 'dired-up-directory',
+  '-': 'dired-up-directory',
   'm': 'dired-mark',
   'u': 'dired-unmark',
   'U': 'dired-unmark-all',

@@ -141,7 +141,7 @@ async function copyPath(path) {
   message('Copied %s', path);
 }
 
-defcommand('find-file', { doc: 'Visit a file, choosing it with helm. RET on a directory enters it; DEL at a "/" or C-l goes up. The "Open" action on a directory shows it in dired.' }, () => helmFindFiles({
+defcommand('find-file', { doc: 'Visit a file, choosing it with helm. RET opens a file, or a directory in dired; TAB enters a directory; DEL at a "/" or C-l goes up.' }, () => helmFindFiles({
   actions: {
     'Find file': (p) => openFile(p),
     'Open directory in dired': async (p) => {
@@ -207,11 +207,11 @@ function ffSession() {
   return s;
 }
 
-defcommand('helm-ff-maybe-exit', { doc: 'In find-file: enter a directory, or run the default action on a file.' }, () => {
+defcommand('helm-ff-enter-or-actions', { doc: 'In find-file: TAB enters a directory; on a file it shows the actions.' }, () => {
   const s = ffSession();
   const sel = s.selected();
   if (!s.actionMode && sel?.cand.data?.isDir) return s.setInput(abbreviateFileName(sel.cand.value));
-  return call('helm-maybe-exit');
+  return call('helm-select-action');
 });
 
 defcommand('helm-ff-persistent', { doc: 'In find-file: enter a directory (C-z on a file previews it).' }, () => {
@@ -237,8 +237,9 @@ defcommand('helm-ff-delete-char-backward', { doc: 'In find-file: delete a charac
   s.setInput(q.slice(0, -1));
 });
 
+// RET runs the default action: a file opens, a directory opens in dired.
 defineKey({ keymaps: 'helm-find-files-map' }, {
-  'RET': 'helm-ff-maybe-exit',
+  'TAB': 'helm-ff-enter-or-actions',
   'C-z': 'helm-ff-persistent',
   'C-l': 'helm-find-files-up-one-level',
 });
