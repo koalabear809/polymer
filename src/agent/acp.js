@@ -61,7 +61,7 @@ export class AcpClient {
       }
     });
     this.procId = await invoke('proc_spawn', {
-      options: { program: this.def.command, args: this.def.args ?? [], cwd: this.def.cwd, env: this.def.env, tag: 'acp' },
+      options: { program: this.def.command, args: this.def.args ?? [], cwd: this.def.cwd, env: this.def.env, envRemove: this.def.envRemove ?? [], tag: 'acp' },
       channel,
     });
     const info = await appInfo();
@@ -98,6 +98,10 @@ export class AcpClient {
 
   setMode(sessionId, modeId) {
     return this.conn.request('session/set_mode', { sessionId, modeId });
+  }
+
+  setModel(sessionId, modelId) {
+    return this.conn.request('session/set_model', { sessionId, modelId });
   }
 
   async kill() {

@@ -43,7 +43,9 @@ export class JsonRpcConnection {
       if (!p) return;
       this.pending.delete(msg.id);
       if (msg.error) {
-        const err = new Error(msg.error.message ?? 'Request failed');
+        // ACP agents put the useful part in error.data.details ("Internal error" alone says nothing).
+        const details = msg.error.data?.details ?? (typeof msg.error.data === 'string' ? msg.error.data : null);
+        const err = new Error(details ? `${msg.error.message ?? 'Request failed'}: ${details}` : (msg.error.message ?? 'Request failed'));
         err.code = msg.error.code;
         err.data = msg.error.data;
         p.reject(err);
