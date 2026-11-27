@@ -211,3 +211,7 @@ src-tauri/            Rust backend (files, processes, terminals, MCP server)
 - `SPC b b` switch buffers; in helm: `C-j`/`C-k` move, `TAB` actions, `C-SPC` mark,
   `C-z` preview, `Esc` for normal state (`j`/`k`, `gg`/`G`), `C-g` quit
 - `SPC w v` / `SPC w s` split; `C-w h/j/k/l` move between windows
+
+## License
+
+MIT; see [LICENSE](LICENSE). Bundled third-party code: [THIRD-PARTY.md](THIRD-PARTY.md).
