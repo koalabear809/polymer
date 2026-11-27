@@ -14,7 +14,7 @@ import { defineMajorMode, setMajorMode } from '../core/modes.js';
 import { defineKey } from '../core/keymap.js';
 import { getBufferCreate, getBuffer, generateNewBufferName, currentBuffer, bufferList } from '../core/buffer.js';
 import { Marker } from '../core/marker.js';
-import { selectedWindow, setWindowBuffer, displayBuffer } from '../core/window.js';
+import { selectedWindow, setWindowBuffer, displayBuffer, windowList } from '../core/window.js';
 import { completingRead } from '../core/helm/helm.js';
 import { message } from '../core/echo.js';
 import { PolymerError, Quit } from '../core/errors.js';
@@ -156,9 +156,9 @@ function render(b) {
   ].filter(Boolean).join('  ·  ');
   push(sub, { decos: [{ from: 0, to: sub.length, face: 'agent-dim' }] });
   
-  // Banner with session info
+  // Build header line content (shown at top of window, not in buffer)
+  let headerLine = null;
   if (getVarOr('agent-show-banner', true, b) && a.sessionId) {
-    push('');
     const thoughtLevel = getVarOr('agent-thought-level', 'full', b);
     const tokenCosts = getVarOr('agent-token-costs', {}, b);
     const costs = a.currentModel && tokenCosts[a.currentModel];
@@ -175,8 +175,7 @@ function render(b) {
       costs && `Cost: $${totalCost.toFixed(4)}`,
     ].filter(Boolean);
     
-    const banner = `┌─ Session ─ ${bannerParts.join('  │  ')} ─┐`;
-    push(banner, { decos: [{ from: 0, to: banner.length, face: 'agent-dim' }] });
+    headerLine = `Session  │  ${bannerParts.join('  │  ')}`;
   }
 
   let prevType = null;
@@ -285,14 +284,14 @@ function render(b) {
   // The prompt line: "❯ " starts the editable input.
   const transcript = `${lines.join('\n')}\n${PROMPT}`;
   meta.push({ decos: [{ from: 0, to: PROMPT.length - 1, face: 'agent-prompt' }] });
-  return { transcript, meta };
+  return { transcript, meta, headerLine };
 }
 
 /** Redraw the read-only part, leaving the input alone. Only the changed tail is replaced. */
 function redraw(b) {
   const a = b.agent;
   if (!a || !b.live) return;
-  const { transcript, meta } = render(b);
+  const { transcript, meta, headerLine } = render(b);
   const inputStart = b.readOnlyBefore.pos;
   const old = b.getText(0, inputStart);
   let i = 0;
@@ -310,6 +309,19 @@ function redraw(b) {
   a.meta = meta;
   if (inInput) b.point.set(b.length - fromEnd);
   else if (before) b.point.set(b.offsetAt(before.line, before.col));
+  
+  // Update header line in all windows showing this buffer
+  for (const win of windowList()) {
+    if (win.buffer === b && win.headerLineEl) {
+      if (headerLine) {
+        win.headerLineEl.textContent = headerLine;
+        win.headerLineEl.style.display = '';
+      } else {
+        win.headerLineEl.style.display = 'none';
+      }
+    }
+  }
+  
   b.touch();
 }
 

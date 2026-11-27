@@ -37,6 +37,7 @@ export class Window {
     this.renderedBuffer = null;
     this.el = null;
     this.bodyEl = null;
+    this.headerLineEl = null;
     this.modeLineEl = null;
   }
   get live() { return !!findLeaf(root, this); }
@@ -375,10 +376,13 @@ function buildLayout(node) {
     if (!w.el) {
       w.el = document.createElement('div');
       w.el.className = 'window';
+      w.headerLineEl = document.createElement('div');
+      w.headerLineEl.className = 'header-line';
+      w.headerLineEl.style.display = 'none'; // Hidden by default
       const body = createView(w, () => scheduleRedisplay());
       w.modeLineEl = document.createElement('div');
       w.modeLineEl.className = 'mode-line';
-      w.el.append(body, w.modeLineEl);
+      w.el.append(w.headerLineEl, body, w.modeLineEl);
       w.el.addEventListener('mousedown', (e) => onWindowMouseDown(w, e));
       // Buffers can take over the wheel (a terminal scrolls its own history).
       body.addEventListener('wheel', (e) => {

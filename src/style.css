@@ -197,6 +197,20 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
   text-decoration: underline;
 }
 
+/* ---- header line ---- */
+
+.header-line {
+  flex: none;
+  padding: 4px 8px;
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: calc(var(--font-size) * 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---- mode line ---- */
 
 .mode-line {
