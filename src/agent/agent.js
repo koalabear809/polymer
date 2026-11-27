@@ -25,7 +25,7 @@ import {
 import { AcpClient } from './acp.js';
 
 defvar('agent-definitions', {
-  'claude-code': { label: 'Claude Code', command: 'npx', args: ['-y', '@zed-industries/claude-code-acp'] },
+  'claude-code': { label: 'Claude Code', command: 'npx', args: ['-y', '@agentclientprotocol/claude-agent-acp'] },
 }, { doc: 'ACP agents: name -> { label, command, args, env }.' });
 defvar('agent-default', 'claude-code', { doc: 'The agent started by SPC a a.' });
 defvar('agent-env-remove', [

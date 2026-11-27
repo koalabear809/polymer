@@ -134,10 +134,10 @@ plain text, so vim motions and search work; commands act on the line at point.
 ## Agents (ACP)
 
 `SPC a a` opens Claude Code for the current project (via
-`npx @zed-industries/claude-code-acp`; needs Node.js and a Claude login: run `claude` in
+`npx @agentclientprotocol/claude-agent-acp`; needs Node.js and a Claude login: run `claude` in
 a terminal and `/login` once). Any ACP agent can be added with `defineAgent`.
 
-- Type after `❯` and press `RET` (insert state) to send; `S-RET` / `C-j` for a newline.
+- Type after `❯`; `RET` (insert state) or `C-j` adds a newline, and `C-c C-c` (or `RET` in normal state) sends.
   Mention files with `@path`. `C-c C-k` cancels, `C-c m` switches mode (e.g. plan),
   `C-c n` new conversation, `C-c /` slash commands. `RET` on a tool line opens its file.
 - The agent reads files through your buffers (it sees unsaved edits) and writes through

@@ -82,6 +82,8 @@ pub struct SpawnProcessOptions {
     args: Vec<String>,
     cwd: Option<String>,
     env: Option<HashMap<String, String>>,
+    /// Variables to remove from the environment the process inherits from Polymer.
+    env_remove: Option<Vec<String>>,
     /// Free-form label, e.g. "acp", so the frontend can find its processes after a reload.
     tag: Option<String>,
 }
@@ -120,6 +122,9 @@ fn command_for(program: &str, options: &SpawnProcessOptions) -> Command {
     cmd.args(&options.args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if let Some(cwd) = &options.cwd {
         cmd.current_dir(cwd);
+    }
+    for k in options.env_remove.clone().unwrap_or_default() {
+        cmd.env_remove(k);
     }
     for (k, v) in options.env.clone().unwrap_or_default() {
         cmd.env(k, v);
@@ -262,6 +267,23 @@ mod tests {
         })
         .unwrap();
         assert_eq!((out.code, out.stdout.as_str(), out.stderr.trim()), (Some(3), "hello", "err"));
+    }
+
+    #[test]
+    fn spawn_options_remove_inherited_variables_but_explicit_ones_win() {
+        let options = SpawnProcessOptions {
+            program: "x".into(),
+            args: vec![],
+            cwd: None,
+            env: Some(HashMap::from([("KEEP".to_string(), "1".to_string()), ("DROP_THEN_SET".to_string(), "2".to_string())])),
+            env_remove: Some(vec!["CLAUDECODE".into(), "DROP_THEN_SET".into()]),
+            tag: None,
+        };
+        let cmd = command_for("x", &options);
+        let envs: HashMap<_, _> = cmd.get_envs().map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string()))).collect();
+        assert_eq!(envs.get("CLAUDECODE"), Some(&None), "removed from the inherited environment");
+        assert_eq!(envs.get("KEEP"), Some(&Some("1".to_string())));
+        assert_eq!(envs.get("DROP_THEN_SET"), Some(&Some("2".to_string())), "an explicit value wins over removal");
     }
 
     #[test]
