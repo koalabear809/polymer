@@ -106,6 +106,18 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
   word-wrap: break-word;
   overflow-wrap: break-word;
   height: auto;
+  display: flex;
+}
+.line.wrapped .lt {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+.line.wrapped .gutter {
+  flex: none;
+  position: static;
 }
 .line.wrapped-continuation .gutter {
   /* Hide line number on continuation lines */

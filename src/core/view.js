@@ -432,6 +432,16 @@ export function renderView(win, selected, point) {
   }
   
   const hl = selected && getVarOr('global-hl-line-mode', true, buf);
+  
+  // Apply wrapping mode unconditionally (not inside render-key guard)
+  if (wrapped) {
+    win.linesEl.classList.add('wrapped-mode');
+    win.spacerEl.style.display = 'none';
+  } else {
+    win.linesEl.classList.remove('wrapped-mode');
+    win.spacerEl.style.display = '';
+  }
+  
   const key = `${epoch}|${buf.version}|${first}|${last}|${hl ? pos.line : -1}|${numbers === 'relative' ? pos.line : ''}|${gutterChars}|${tabWidth}|${wrapped}`;
   if (key !== win.renderKey || win.renderedBuffer !== buf) {
     const opts = { gutterChars, gutterPx, numbers, pointLine: pos.line, hl, wrapped };
@@ -447,14 +457,8 @@ export function renderView(win, selected, point) {
     // Position based on whether we're wrapping
     if (wrapped) {
       // For wrapped lines, don't use transform - render all and let browser handle positioning
-      win.linesEl.classList.add('wrapped-mode');
       win.linesEl.style.transform = '';
-      
-      // Hide the spacer when wrapping (content provides its own height)
-      win.spacerEl.style.display = 'none';
     } else {
-      win.linesEl.classList.remove('wrapped-mode');
-      win.spacerEl.style.display = '';
       win.linesEl.style.transform = `translateY(${first * lh}px)`;
     }
     win.renderKey = key;
