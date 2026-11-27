@@ -179,14 +179,17 @@ Add tools with `defineMcpTool(name, { description, inputSchema, handler })`.
 ## Themes
 
 `SPC t t` (`load-theme`) picks a theme, previewing each as you move; the choice is
-remembered. Bundled: Gruvbox Dark (default), Gruvbox Dark Hard, Tokyo Night,
-Catppuccin Mocha, Nord, One Dark, Andromeda. A theme sets the CSS variables in
+remembered. Bundled dark themes: Gruvbox Dark (default), Gruvbox Dark Hard, Tokyo Night,
+Catppuccin Mocha, Nord, One Dark, Andromeda. Light: Gruvbox Light, Solarized Light,
+Catppuccin Latte, One Light, GitHub Light. A theme sets the CSS variables in
 `src/style.css` (UI, `--syn-*` syntax colors, `--term-0`..`--term-15`).
 
-Themes are files, one per theme, named after it. The first time Polymer runs, it copies
-the bundled ones into `~/.polymer/themes/` (`custom-theme-directory`). Edit them or add
-your own there, then run `M-x reload-themes`. A file there replaces the bundled theme
-with the same name.
+Themes are files, one per theme, named after it. Polymer copies the bundled ones into
+`~/.polymer/themes/` (`custom-theme-directory`) at startup: all of them the first time,
+and later any new in an update (a bundled theme whose file you deleted stays deleted).
+Edit them or add your own there; saving a file in that directory reloads the themes
+(`theme-reload-on-save`), or run `M-x reload-themes`. A file there replaces the bundled
+theme with the same name, and deleting a file removes its theme on the next reload.
 
 ```js
 // ~/.polymer/themes/my-theme.js

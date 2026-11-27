@@ -31,7 +31,8 @@
   --font: "JetBrains Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
   --font-size: 13px;
   --line-height: 1.5;
-  color-scheme: dark;
+  /* Light themes set --color-scheme: light. */
+  color-scheme: var(--color-scheme, dark);
 }
 
 * { box-sizing: border-box; }

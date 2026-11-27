@@ -24,7 +24,7 @@
 // Or define one from init.js or a package:
 //   defineTheme('my-theme', { label: 'Mine', base: 'gruvbox-dark', ui: { bg: '#202020' } })
 
-import { defcommand, defvar, getVarOr, setq, addVariableWatcher, runHooks } from '../core/registry.js';
+import { defcommand, defvar, getVarOr, setq, addVariableWatcher, runHooks, addHook } from '../core/registry.js';
 import { helm } from '../core/helm/helm.js';
 import { message } from '../core/echo.js';
 import { PolymerError } from '../core/errors.js';
@@ -51,12 +51,14 @@ defvar('custom-theme-directory', null, {
     '          macro type parameter property attribute tag label punctuation, and optionally',
     '          variable (default: fg) and number (default: constant)',
     '  term    the 16 terminal colors: an array, or { index: color }',
-    '  colors  any CSS variables, e.g. { "--font-size": "14px" }',
+    '  colors  any CSS variables, e.g. { "--font-size": "14px" }; light themes set',
+    '          { "--color-scheme": "light" } so scrollbars and form controls match',
   ].join('\n'),
 });
 
 /** The themes that ship with Polymer (src/themes/builtin/NAME.js). */
-export const BUILTIN_THEMES = ['gruvbox-dark', 'gruvbox-dark-hard', 'tokyo-night', 'catppuccin-mocha', 'nord', 'one-dark', 'andromeda'];
+export const BUILTIN_THEMES = ['gruvbox-dark', 'gruvbox-dark-hard', 'tokyo-night', 'catppuccin-mocha', 'nord', 'one-dark', 'andromeda',
+  'gruvbox-light', 'solarized-light', 'catppuccin-latte', 'one-light', 'github-light'];
 
 // name -> entry { name, label, base, own, file }. `own` holds the theme's own variables;
 // `base` is a theme name, or the entry a theme replaced when it names itself as its base
@@ -203,7 +205,7 @@ export function restoreChosenTheme() {
 // ---------------------------------------------------------------------------
 // Theme files
 //
-// The theme directory starts with copies of the built-in themes. So that later fixes to
+// The theme directory gets copies of the built-in themes (new ones too). So that later fixes to
 // those still arrive, <dir>.defaults.json records a hash of each copy as written: a copy
 // that still matches is unedited, so the built-in theme is used and the copy is brought
 // up to date. Once edited, the file is the user's and replaces the built-in theme.
@@ -223,6 +225,17 @@ async function builtinSource(name) {
 }
 
 const baseName = (path) => path.replace(/^.*[\\/]/, '').replace(/\.js$/, '');
+
+/** True if `path` is directly in `dir` (which ends in a separator). */
+function inDirectory(path, dir) {
+  const norm = (p) => {
+    const s = p.replace(/\\/g, '/');
+    return /^[a-z]:\//i.test(s) ? s.toLowerCase() : s; // Windows paths ignore case
+  };
+  const p = norm(path);
+  const d = norm(dir);
+  return p.startsWith(d) && !p.slice(d.length).includes('/');
+}
 
 /** FNV-1a of the text with line endings normalized. */
 function hashText(text) {
@@ -258,9 +271,10 @@ export async function loadThemeFile(path) {
 
 /**
  * Copy built-in themes to the theme directory: `names` (default all). Existing files are
- * kept unless `overwrite`. Resolves to the names copied.
+ * kept unless `overwrite`. With `keepRemoved`, themes copied once before whose file is gone
+ * (the user deleted it) are not copied again. Resolves to the names copied.
  */
-export async function installDefaultThemes({ names = BUILTIN_THEMES, overwrite = false } = {}) {
+export async function installDefaultThemes({ names = BUILTIN_THEMES, overwrite = false, keepRemoved = false } = {}) {
   const dir = themeDirectory();
   if (!dir || !isTauri) throw new PolymerError('user-error', 'No theme directory (not running in the app?)');
   await makeDirectory(dir);
@@ -269,6 +283,7 @@ export async function installDefaultThemes({ names = BUILTIN_THEMES, overwrite =
   for (const name of names) {
     const path = `${dir}${name}.js`;
     if (!overwrite && (await pathInfo(path)).exists) continue;
+    if (!overwrite && keepRemoved && manifest[name]) continue;
     const text = await builtinSource(name);
     await writeTextFile(path, text, false);
     manifest[name] = hashText(text);
@@ -285,8 +300,8 @@ export const themesReady = () => loading ?? Promise.resolve();
 
 /**
  * Load the built-in themes, then the files in the theme directory (`user: false` skips
- * those), then re-apply the active theme once. Creates the directory with copies of the
- * built-ins the first time. Resolves to { themes, errors }.
+ * those), then re-apply the active theme once. Copies built-in themes missing from the
+ * directory into it (all of them the first time). Resolves to { themes, errors }.
  */
 export function loadThemes(opts) {
   const run = (loading ?? Promise.resolve()).then(() => loadThemesNow(opts));
@@ -316,11 +331,18 @@ async function loadThemesNow({ user = true } = {}) {
 
 async function loadUserThemes(dir, builtins) {
   const errors = [];
-  if (!(await pathInfo(dir)).exists) {
-    try {
-      await installDefaultThemes();
-      message('Created %s with the built-in themes', abbreviateFileName(dir));
-    } catch (e) { errors.push({ path: dir, error: e }); }
+  // Built-in themes not in the directory yet (first run, or new in this version) land there,
+  // except ones the user deleted.
+  const existed = (await pathInfo(dir)).exists;
+  try {
+    const copied = await installDefaultThemes({ names: builtins.filter((x) => x.text !== undefined).map((x) => x.name), keepRemoved: true });
+    if (!existed) message('Created %s with the built-in themes', abbreviateFileName(dir));
+    else if (copied.length) message('Added built-in themes to %s: %s', abbreviateFileName(dir), copied.join(', '));
+  } catch (e) { errors.push({ path: dir, error: e }); }
+  // Forget themes from this directory's files; the files are read afresh below, so a deleted
+  // file's theme goes away (built-in themes were already defined again).
+  for (const [name, entry] of themes) {
+    if (entry.file && inDirectory(entry.file, dir) && !BUILTIN_THEMES.includes(name)) themes.delete(name);
   }
   let names = [];
   try { names = (await listDirectory(dir)).filter((e) => !e.isDir && e.name.endsWith('.js')).map((e) => e.name); } catch { /* unreadable */ }
@@ -415,6 +437,18 @@ export function initThemeDirectory() {
   if (!themeDirectory() && config) setq('custom-theme-directory', `${config}themes/`, null);
   startupDone = true;
 }
+
+defvar('theme-reload-on-save', true, { doc: 'Reload the themes when a file in the theme directory is saved.' });
+
+// Saving a theme file shows the change at once.
+addHook('after-save-hook', function reloadThemesAfterSave(buf) {
+  const dir = themeDirectory();
+  if (!dir || !buf.file || !buf.file.endsWith('.js') || !inDirectory(buf.file, dir)) return;
+  if (!getVarOr('theme-reload-on-save', true, buf)) return;
+  loadThemes().then(({ errors }) => {
+    if (!errors.length) message('Reloaded themes (%s)', baseName(buf.file));
+  }, (e) => message('Themes: %s', e.message ?? e));
+});
 
 // Pointing custom-theme-directory elsewhere (e.g. from init.js) loads the themes there.
 addVariableWatcher('custom-theme-directory', () => {
