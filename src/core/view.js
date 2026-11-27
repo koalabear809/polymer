@@ -447,11 +447,13 @@ export function renderView(win, selected, point) {
     // Position based on whether we're wrapping
     if (wrapped) {
       // For wrapped lines, don't use transform - render all and let browser handle positioning
+      win.linesEl.classList.add('wrapped-mode');
       win.linesEl.style.transform = '';
       
       // Hide the spacer when wrapping (content provides its own height)
       win.spacerEl.style.display = 'none';
     } else {
+      win.linesEl.classList.remove('wrapped-mode');
       win.spacerEl.style.display = '';
       win.linesEl.style.transform = `translateY(${first * lh}px)`;
     }
@@ -474,9 +476,23 @@ export function renderView(win, selected, point) {
     cursor.style.width = `${Math.max(w, 2)}px`;
     cursor.style.height = `${lh}px`;
     const cx = gutterPx + x;
-    cursor.style.transform = `translate(${cx}px, ${pos.line * lh}px)`;
+    
+    // Calculate Y position - for wrapped lines, get from DOM; otherwise use line * lh
+    let cy;
+    if (wrapped) {
+      const lineEl = win.lineEls.get(pos.line);
+      if (lineEl) {
+        cy = lineEl.offsetTop;
+      } else {
+        cy = pos.line * lh; // Fallback
+      }
+    } else {
+      cy = pos.line * lh;
+    }
+    
+    cursor.style.transform = `translate(${cx}px, ${cy}px)`;
     cursor.dataset.x = cx;
-    cursor.dataset.y = pos.line * lh;
+    cursor.dataset.y = cy;
 
     // Horizontal scrolling to keep the cursor visible.
     if (pointMoved && hscroll) {

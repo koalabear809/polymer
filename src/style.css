@@ -91,6 +91,7 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
 
 .view-spacer { pointer-events: none; }
 .view-lines { position: absolute; top: 0; left: 0; will-change: transform; }
+.view-lines.wrapped-mode { position: relative; transform: none !important; }
 
 .line {
   height: calc(var(--font-size) * var(--line-height));
