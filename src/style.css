@@ -500,6 +500,18 @@ body.helm-active #echo { display: none; }
 .sidebar::-webkit-scrollbar-thumb { background: var(--bg-hl); border-radius: 4px; }
 .sidebar::-webkit-scrollbar-corner { background: transparent; }
 
+.sidebar:focus,
+.sidebar.sidebar-focused {
+  outline: none;
+  border-right-color: var(--accent);
+}
+
+.sidebar-right:focus,
+.sidebar-right.sidebar-focused {
+  border-left-color: var(--accent);
+  border-right-color: var(--border);
+}
+
 /* ---- file tree ---- */
 
 .filetree-header {

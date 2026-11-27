@@ -18,6 +18,7 @@ import {
   switchToPrevBuffer, replaceBufferInWindows, scrollWindow, windowBodyLines, scrollToEdge,
   windowList, resizeWindow, maximizeWindow,
 } from '../core/window.js';
+import { sidebarInDirection, getFocusedSidebar, focusSidebar } from '../core/sidebar.js';
 import { prefix } from '../vim/core.js';
 import { perspBufferList, currentPersp } from '../persp/persp.js';
 import { PolymerError } from '../core/errors.js';
@@ -234,6 +235,43 @@ defcommand('maximize-window-horizontally', { doc: 'Make the selected window as w
 
 for (const dir of ['left', 'right', 'up', 'down']) {
   defcommand(`windmove-${dir}`, { doc: `Select the window ${dir === 'up' || dir === 'down' ? (dir === 'up' ? 'above' : 'below') : `to the ${dir}`}.` }, () => {
+    // Check if we're currently in a sidebar
+    const focusedSidebar = getFocusedSidebar();
+    if (focusedSidebar) {
+      // Moving out of sidebar back to main windows
+      if ((focusedSidebar.side === 'left' && dir === 'right') ||
+          (focusedSidebar.side === 'right' && dir === 'left')) {
+        // Blur the sidebar first
+        focusedSidebar.el.blur();
+        // Focus the selected window's body
+        const win = selectedWindow();
+        if (win && win.el) {
+          const body = win.el.querySelector('.window-body');
+          if (body) {
+            body.focus();
+            // Show cursor again
+            const cursor = win.el.querySelector('.cursor');
+            if (cursor) {
+              cursor.style.visibility = '';
+            }
+          }
+        }
+        return;
+      }
+      // Otherwise stay in sidebar
+      return;
+    }
+    
+    // Check if there's a sidebar in that direction
+    if (dir === 'left' || dir === 'right') {
+      const sidebar = sidebarInDirection(dir);
+      if (sidebar) {
+        focusSidebar(sidebar.id);
+        return;
+      }
+    }
+    
+    // Normal window navigation
     const w = windowInDirection(dir);
     if (!w) return message(`No window ${dir} from selected window`);
     selectWindow(w);

@@ -1,95 +1,49 @@
-// Sidebar API: manage persistent sidebars that can be toggled and are keyboard-accessible.
+// Sidebar API: manage persistent sidebars that display buffers.
 //
-// Sidebars are fixed panels on the left or right side of the editor. Each sidebar has:
-// - A DOM element for rendering custom content
-// - A hidden buffer for keyboard navigation
-// - Event handlers that sync between DOM and buffer
-// - Toggle state that persists
+// Sidebars are pinned windows that split from the root.
+// They display regular Polymer buffers (like dired) in a persistent window.
 
 import { defvar, getVarOr, setq } from './registry.js';
-import { getBufferCreate } from './buffer.js';
-import { setMajorMode } from './modes.js';
+import { splitWindow, deleteWindow, selectedWindow, selectWindow, setWindowBuffer, windowList } from './window.js';
 import { scheduleRedisplay } from './redisplay.js';
 
-defvar('sidebar-width', 300, { doc: 'Default width of sidebars in pixels.' });
+defvar('sidebar-width', 300, { doc: 'Default width of sidebars in columns (characters).' });
 
-const sidebars = new Map(); // id -> { el, buffer, side, width, visible, renderFn, keyHandler }
+const sidebars = new Map(); // id -> { window, side, buffer }
 
 /**
- * Create or get a sidebar.
+ * Create or get a sidebar that displays a buffer.
  * 
  * @param {string} id - Unique identifier for this sidebar
+ * @param {Buffer} buffer - The buffer to display in the sidebar
  * @param {Object} options
  * @param {'left'|'right'} options.side - Which side to show the sidebar (default: 'left')
- * @param {number} options.width - Width in pixels (default: from sidebar-width var)
- * @param {function} options.render - Function called to render sidebar content: (sidebarEl) => void
- * @param {function} options.onKey - Optional key handler: (key, event) => boolean (return true to prevent default)
- * @param {string} options.bufferName - Name for the hidden buffer (default: `*Sidebar: ${id}*`)
- * @param {string} options.modeName - Major mode for the buffer (default: 'special-mode')
  * @returns {Object} Sidebar object
  */
-export function createSidebar(id, options = {}) {
+export function createSidebar(id, buffer, options = {}) {
   if (sidebars.has(id)) {
-    return sidebars.get(id);
+    const sidebar = sidebars.get(id);
+    // Update buffer if different
+    if (sidebar.buffer !== buffer) {
+      setWindowBuffer(sidebar.window, buffer);
+      sidebar.buffer = buffer;
+    }
+    return sidebar;
   }
   
   const {
     side = 'left',
-    width = getVarOr('sidebar-width', 300),
-    render = null,
-    onKey = null,
-    bufferName = `*Sidebar: ${id}*`,
-    modeName = 'special-mode',
   } = options;
   
-  // Create DOM element
-  const el = document.createElement('div');
-  el.className = `sidebar sidebar-${side}`;
-  el.id = `sidebar-${id}`;
-  el.style.width = `${width}px`;
-  el.style.display = 'none';
-  el.setAttribute('tabindex', '-1');
-  
-  // Add to frame
-  const frame = document.getElementById('frame');
-  if (side === 'left') {
-    frame.prepend(el);
-  } else {
-    frame.appendChild(el);
-  }
-  
-  // Create hidden buffer for keyboard navigation
-  const buffer = getBufferCreate(bufferName);
-  setMajorMode(buffer, modeName);
-  buffer.undoEnabled = false;
-  buffer.locals.set('display-line-numbers', false);
-  
-  // Track sidebar
+  // Track sidebar (window will be created when shown)
   const sidebar = {
     id,
-    el,
-    buffer,
+    window: null,
     side,
-    width,
-    visible: false,
-    renderFn: render,
-    keyHandler: onKey,
+    buffer,
   };
   
   sidebars.set(id, sidebar);
-  
-  // Set up keyboard focus handling
-  el.addEventListener('keydown', (e) => {
-    if (onKey && onKey(e.key, e)) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-  });
-  
-  // Initial render
-  if (render) {
-    render(el);
-  }
   
   return sidebar;
 }
@@ -105,24 +59,44 @@ export function showSidebar(id) {
     return;
   }
   
-  if (sidebar.visible) return;
-  
-  // Show sidebar
-  sidebar.el.style.display = 'block';
-  sidebar.visible = true;
-  
-  // Adjust windows container to make room
-  const windowsEl = document.getElementById('windows');
-  const currentMargin = parseInt(windowsEl.style.marginLeft || '0');
-  const currentMarginRight = parseInt(windowsEl.style.marginRight || '0');
-  
-  if (sidebar.side === 'left') {
-    windowsEl.style.marginLeft = `${currentMargin + sidebar.width}px`;
-  } else {
-    windowsEl.style.marginRight = `${currentMarginRight + sidebar.width}px`;
+  if (sidebar.window && sidebar.window.live) {
+    // Already visible, just select it
+    selectWindow(sidebar.window);
+    return;
   }
   
-  setq(`${id}-visible`, true);
+  // Get the leftmost/rightmost window to split from
+  const windows = windowList();
+  let targetWindow = windows[sidebar.side === 'left' ? 0 : windows.length - 1];
+  
+  // Split the window (splitWindow only supports 'below' and 'right')
+  // For left sidebar, we split right and select the original window
+  const newWin = splitWindow(targetWindow, 'right');
+  
+  let sidebarWin;
+  if (sidebar.side === 'left') {
+    // We want the new window to be the sidebar, but splitWindow creates it on the right
+    // So we need to swap: set the buffer on the original window and use it as sidebar
+    sidebarWin = targetWindow;
+    // Restore the buffer to the new window
+    setWindowBuffer(newWin, targetWindow.buffer);
+  } else {
+    sidebarWin = newWin;
+  }
+  
+  // Set the buffer in the sidebar window
+  setWindowBuffer(sidebarWin, sidebar.buffer);
+  
+  // Mark as sidebar
+  sidebarWin.isSidebar = true;
+  sidebarWin.sidebarId = id;
+  
+  // Store the window
+  sidebar.window = sidebarWin;
+  
+  // Select it
+  selectWindow(sidebarWin);
+  
   scheduleRedisplay();
 }
 
@@ -137,24 +111,12 @@ export function hideSidebar(id) {
     return;
   }
   
-  if (!sidebar.visible) return;
+  if (!sidebar.window || !sidebar.window.live) return;
   
-  // Hide sidebar
-  sidebar.el.style.display = 'none';
-  sidebar.visible = false;
+  // Delete the window
+  deleteWindow(sidebar.window);
+  sidebar.window = null;
   
-  // Restore windows container
-  const windowsEl = document.getElementById('windows');
-  const currentMargin = parseInt(windowsEl.style.marginLeft || '0');
-  const currentMarginRight = parseInt(windowsEl.style.marginRight || '0');
-  
-  if (sidebar.side === 'left') {
-    windowsEl.style.marginLeft = `${Math.max(0, currentMargin - sidebar.width)}px`;
-  } else {
-    windowsEl.style.marginRight = `${Math.max(0, currentMarginRight - sidebar.width)}px`;
-  }
-  
-  setq(`${id}-visible`, false);
   scheduleRedisplay();
 }
 
@@ -169,7 +131,7 @@ export function toggleSidebar(id) {
     return;
   }
   
-  if (sidebar.visible) {
+  if (sidebar.window && sidebar.window.live) {
     hideSidebar(id);
   } else {
     showSidebar(id);
@@ -177,14 +139,14 @@ export function toggleSidebar(id) {
 }
 
 /**
- * Update sidebar content by calling its render function.
+ * Update sidebar (triggers redisplay).
  * @param {string} id - Sidebar identifier
  */
 export function updateSidebar(id) {
   const sidebar = sidebars.get(id);
-  if (!sidebar || !sidebar.renderFn) return;
+  if (!sidebar) return;
   
-  sidebar.renderFn(sidebar.el);
+  scheduleRedisplay();
 }
 
 /**
@@ -194,7 +156,7 @@ export function updateSidebar(id) {
  */
 export function isSidebarVisible(id) {
   const sidebar = sidebars.get(id);
-  return sidebar ? sidebar.visible : false;
+  return sidebar && sidebar.window && sidebar.window.live;
 }
 
 /**
@@ -214,21 +176,50 @@ export function destroySidebar(id) {
   const sidebar = sidebars.get(id);
   if (!sidebar) return;
   
-  if (sidebar.visible) {
+  if (sidebar.window && sidebar.window.live) {
     hideSidebar(id);
   }
   
-  sidebar.el.remove();
   sidebars.delete(id);
 }
 
 /**
- * Focus a sidebar (gives it keyboard focus).
+ * Focus a sidebar (selects its window).
  * @param {string} id - Sidebar identifier
  */
 export function focusSidebar(id) {
   const sidebar = sidebars.get(id);
-  if (!sidebar || !sidebar.visible) return;
+  if (!sidebar || !sidebar.window || !sidebar.window.live) return;
   
-  sidebar.el.focus();
+  selectWindow(sidebar.window);
+}
+
+/**
+ * Get a visible sidebar in the given direction from the selected window.
+ * @param {'left'|'right'} direction - Direction to check
+ * @returns {Object|null} Sidebar object or null
+ */
+export function sidebarInDirection(direction) {
+  for (const [id, sidebar] of sidebars) {
+    if (sidebar.window && sidebar.window.live && sidebar.side === direction) {
+      return sidebar;
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if the selected window is a sidebar.
+ * @returns {Object|null} The focused sidebar or null
+ */
+export function getFocusedSidebar() {
+  const sel = selectedWindow();
+  if (!sel) return null;
+  
+  for (const [id, sidebar] of sidebars) {
+    if (sidebar.window === sel) {
+      return sidebar;
+    }
+  }
+  return null;
 }
