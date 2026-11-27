@@ -274,5 +274,5 @@ defcommand('toggle-debug-on-error', { doc: 'Toggle logging full stack traces for
 
 defcommand('polymer-version', { doc: 'Show the Polymer version and platform.' }, async () => {
   const i = await appInfo();
-  message('Polymer %s on %s (config: %s)', i.version, i.platform, i.configDir ?? 'n/a');
+  message('Polymer %s on %s (config: %s). SPC h u checks for updates.', i.version, i.platform, i.configDir ?? 'n/a');
 });

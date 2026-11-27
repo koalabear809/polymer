@@ -1,0 +1,110 @@
+# Builds Polymer for macOS (Apple Silicon + Intel), Windows and Linux.
+#
+#   Release:  push a tag like v0.2.0 (scripts/release.sh does this). The builds are attached
+#             to a DRAFT GitHub release, together with the signed latest.json the in-app
+#             updater reads. Publish the draft to ship it to everyone.
+#   Dry run:  Actions tab -> "Release" -> Run workflow. Builds everything and keeps the
+#             installers as downloadable artifacts, without creating a release.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: macOS (Intel)
+            os: macos-latest
+            target: x86_64-apple-darwin
+          - name: Linux
+            os: ubuntu-22.04
+            target: ''
+          - name: Windows
+            os: windows-latest
+            target: ''
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches the version in Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          v=$(grep -m1 '^version' src-tauri/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
+          if [ "v$v" != "${{ github.ref_name }}" ]; then
+            echo "::error::Tag ${{ github.ref_name }} does not match version $v in src-tauri/Cargo.toml"
+            exit 1
+          fi
+
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev \
+            libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - name: Cache the Tauri CLI
+        id: cli-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri*
+          key: tauri-cli-v2-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Install the Tauri CLI
+        if: steps.cli-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build (and publish to the draft release on tags)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: cargo tauri
+          args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('Polymer {0}', github.ref_name) || '' }}
+          releaseBody: |
+            See the assets below to download Polymer for your system. Installed copies of
+            Polymer offer this update automatically (SPC h u checks now).
+
+            **First launch:** these builds are not code-signed. On macOS, if the app is blocked
+            or reported as damaged, run `xattr -cr /Applications/Polymer.app` once. On Windows,
+            choose "More info" then "Run anyway" in SmartScreen.
+          releaseDraft: true
+          prerelease: false
+          updaterJsonPreferNsis: true
+
+      - name: Keep the installers (dry run only)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: polymer-${{ runner.os }}-${{ matrix.target || runner.arch }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/**/*
+            src-tauri/target/*/release/bundle/**/*

@@ -8,7 +8,7 @@ import { readTextFile, writeTextFile, makeDirectory, pathInfo } from './files.js
 import { helmHistories, restoreHelmHistories } from './helm/helm.js';
 import { configDirectory } from './loader.js';
 
-defvar('savehist-variables', ['recentf-list', 'extended-command-history', 'chosen-theme'], {
+defvar('savehist-variables', ['recentf-list', 'extended-command-history', 'chosen-theme', 'update-skipped-version'], {
   doc: 'Variables saved between sessions (their values must be JSON-serializable).',
 });
 defvar('savehist-interval', 5000, { doc: 'How often (ms) to check whether saved state changed.' });

@@ -4,7 +4,30 @@ A buffer-centric, Emacs-like environment built on Tauri, with vim keys,
 general.el-style keybindings, helm-style completion, and a live, redefinable
 JavaScript runtime. See [PLAN.md](PLAN.md) for the design and roadmap.
 
-## Running
+## Installing
+
+Download the latest build for your system from the
+[Releases page](https://github.com/koalabear809/polymer/releases/latest):
+
+| System | File |
+|---|---|
+| macOS, Apple Silicon (M1 and later) | `Polymer_<version>_aarch64.dmg` |
+| macOS, Intel | `Polymer_<version>_x64.dmg` |
+| Windows | `Polymer_<version>_x64-setup.exe` (or the `.msi`) |
+| Linux | `Polymer_<version>_amd64.AppImage` (`chmod +x` it) or the `.deb` |
+
+The builds aren't code-signed, so the first launch needs one extra step:
+
+- **macOS:** drag Polymer to Applications, then run `xattr -cr /Applications/Polymer.app`
+  once in a terminal (or right-click → Open). It's needed once per install.
+- **Windows:** in the SmartScreen dialog choose *More info* → *Run anyway*.
+- **Linux:** none.
+
+Polymer checks for updates a few seconds after starting and asks before installing; run
+`SPC h u` (`M-x check-for-updates`) to check yourself. Maintainers: see
+[RELEASING.md](RELEASING.md).
+
+## Running from source
 
 Requires Rust and the Tauri CLI (`cargo install tauri-cli --version "^2" --locked`).
 

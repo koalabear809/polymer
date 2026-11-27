@@ -51,6 +51,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(terminal::Terminals::default())
         .manage(process::Processes::default())
+        .plugin(tauri_plugin_process::init())
         .manage(mcp::McpServer::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
@@ -81,6 +82,11 @@ pub fn run() {
             terminal::term_list,
             terminal::term_attach,
         ])
+        .setup(|app| {
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running Polymer");
 }

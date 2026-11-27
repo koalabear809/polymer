@@ -33,6 +33,7 @@ import './git/index.js';
 import './agent/index.js';
 import { killOrphanAgents } from './agent/agent.js';
 import { startMcpServer } from './mcp/mcp.js';
+import { scheduleStartupUpdateCheck } from './updates/updates.js';
 
 const SCRATCH = `// Welcome to Polymer. This is *scratch*: JavaScript you can edit and evaluate.
 //
@@ -106,6 +107,7 @@ async function boot() {
     if (n) message('Re-attached %d terminal%s (SPC b t)', n, n === 1 ? '' : 's');
   });
 
+  scheduleStartupUpdateCheck();
   runHooks('after-init-hook');
 }
 

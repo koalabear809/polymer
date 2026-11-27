@@ -1,7 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Polymer",
-  "version": "0.1.0",
   "identifier": "dev.polymer.editor",
   "build": {
     "frontendDist": "../src"
@@ -24,6 +23,30 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
+    },
+    "shortDescription": "A buffer-centric editor with vim keys and a live JavaScript runtime",
+    "category": "DeveloperTool"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA3NDY3RjIyN0RGQjYxNzQKUldSMFlmdDlJbjlHQjR4Sk93Q1VpYmh1MFk5WXNvc1RkL1FETC96bERjL2tsbm9RUkVMVzRmRDIK",
+      "endpoints": [
+        "https://github.com/koalabear809/polymer/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

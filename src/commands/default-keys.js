@@ -75,6 +75,7 @@ defineKey({ keymaps: 'global', states: ['normal', 'visual'], prefix: 'SPC' }, {
   'h V': 'polymer-version',
   'h p': 'list-packages',
   'h M': 'mcp-connection-info',
+  'h u': 'check-for-updates',
   'h r': { label: 'reload' },
   'h r r': 'reload-init-file',
   'h r p': 'reload-package',
