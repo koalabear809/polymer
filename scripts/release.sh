@@ -19,7 +19,10 @@ printf 'Tag and push v%s? [y/N] ' "$v"
 read -r answer
 [ "$answer" = y ] || { echo "Cancelled."; exit 1; }
 
-sed -i.bak "0,/^version = \".*\"/s//version = \"$v\"/" src-tauri/Cargo.toml && rm -f src-tauri/Cargo.toml.bak
+# Portable (BSD and GNU sed differ): rewrite only the first `version = "..."` line.
+awk -v v="$v" '!done && /^version = "/ { print "version = \"" v "\""; done = 1; next } { print }' src-tauri/Cargo.toml > src-tauri/Cargo.toml.new
+mv src-tauri/Cargo.toml.new src-tauri/Cargo.toml
+[ "$(grep -m1 '^version' src-tauri/Cargo.toml)" = "version = \"$v\"" ] || { echo "Could not set the version in Cargo.toml" >&2; exit 1; }
 (cd src-tauri && cargo update -p polymer --offline >/dev/null 2>&1 || cargo check -q)
 # Nothing to commit when releasing the version already in Cargo.toml.
 if ! git diff --quiet -- src-tauri/Cargo.toml src-tauri/Cargo.lock; then
