@@ -14,6 +14,8 @@ import { setFocusTarget, focusInput } from './focus.js';
 import { onRedisplay } from './redisplay.js';
 import { helmActive } from './helm/helm.js';
 import { viewMetrics } from './view.js';
+import { defcommand } from './registry.js';
+import { readClipboardText, readClipboardImage, imageFromBlob } from './clipboard.js';
 
 let ta = null;
 let composing = false;
@@ -39,6 +41,38 @@ async function insertInput(text, { paste = false } = {}) {
     reportError(e);
   }
 }
+
+/** Paste text where typing would go (insert state), or after the cursor in normal state. */
+export function pasteText(text) {
+  if (!text || helmActive()) return;
+  text = text.replace(/\r\n?/g, '\n');
+  if (currentBuffer()?.onTextInput) insertInput(text, { paste: true });
+  else if (canInsert()) insertInput(text);
+  else if (currentBuffer()) {
+    // Outside insert state, paste after the cursor (or over a selection).
+    callInteractively('vim-paste-from-clipboard', { args: [text] }).catch(reportError);
+  }
+}
+
+/** Give an image ({ mimeType, data }) to the current buffer if it takes images (buffer.onPasteImage). */
+export async function pasteImage(image) {
+  const b = currentBuffer();
+  if (!image || !b?.onPasteImage) return false;
+  await b.onPasteImage(image);
+  return true;
+}
+
+defcommand('clipboard-paste', {
+  doc: 'Paste from the system clipboard (C-v in insert state, C-S-v; Cmd-V on macOS). Buffers that take images (agent prompts) get the clipboard\'s image when it holds no text.',
+}, async () => {
+  // Text wins: Office apps put a picture of copied text on the clipboard alongside it.
+  const text = await readClipboardText();
+  if (!text && currentBuffer()?.onPasteImage) {
+    const image = await readClipboardImage();
+    if (image) return pasteImage(image);
+  }
+  pasteText(text);
+});
 
 function positionInput() {
   if (!ta) return;
@@ -82,15 +116,14 @@ export function attachInput(el) {
 
   ta.addEventListener('paste', (e) => {
     e.preventDefault();
-    let text = e.clipboardData?.getData('text/plain');
-    if (!text || helmActive()) return;
-    text = text.replace(/\r\n?/g, '\n');
-    if (currentBuffer()?.onTextInput) insertInput(text, { paste: true });
-    else if (canInsert()) insertInput(text);
-    else if (currentBuffer()) {
-      // Cmd-V outside insert state pastes after the cursor (or over a selection).
-      callInteractively('vim-paste-from-clipboard', { args: [text] }).catch(reportError);
+    if (helmActive()) return;
+    const text = e.clipboardData?.getData('text/plain');
+    const image = !text && [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'));
+    if (image && currentBuffer()?.onPasteImage) {
+      imageFromBlob(image).then(pasteImage).catch(reportError);
+      return;
     }
+    pasteText(text);
   });
 
   // Keep focus here unless something else (helm) deliberately takes it.

@@ -106,6 +106,8 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
   word-wrap: break-word;
   overflow-wrap: break-word;
   height: auto;
+  /* At least one row: an empty line has no content to give it height and would vanish. */
+  min-height: calc(var(--font-size) * var(--line-height));
   display: flex;
 }
 .line.wrapped .lt {
@@ -119,6 +121,14 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
   flex: none;
   position: static;
 }
+/* Pictures below a line (agent images): their own row under the text. */
+.line.wrapped.has-images { flex-wrap: wrap; }
+.line-images { flex: 0 0 100%; box-sizing: border-box; display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0 6px; white-space: normal; }
+.line-images img {
+  display: block; max-width: min(100%, 640px); max-height: 400px; object-fit: contain;
+  border-radius: 4px; border: 1px solid color-mix(in srgb, var(--fg) 15%, transparent);
+}
+.line-images img.broken { display: none; }
 .line.wrapped-continuation .gutter {
   /* Hide line number on continuation lines */
   color: transparent;
@@ -458,9 +468,20 @@ body.helm-active #echo { display: none; }
 .agent-code { color: var(--syn-string); }
 .line.agent-codeline { background: color-mix(in srgb, var(--fg) 6%, transparent); }
 .line.agent-separator { color: var(--fg-dim); opacity: 0.6; }
+/* Blank lines between parts of an agent conversation (agent-blank-line-height). */
+.line.wrapped.agent-gap { min-height: calc(var(--font-size) * var(--line-height) * var(--agent-gap, 0.6)); }
 .agent-fold { color: var(--accent); font-style: normal; }
 .agent-heading { color: var(--accent-2); font-weight: bold; }
+.agent-h1 { text-decoration: underline; text-underline-offset: 3px; }
+.agent-h3, .agent-h4, .agent-h5, .agent-h6 { color: var(--accent); }
 .agent-bold { font-weight: bold; }
+.agent-italic { font-style: italic; }
+.agent-strike { text-decoration: line-through; color: var(--fg-dim); }
+.agent-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.agent-bullet { color: var(--accent); }
+.agent-quote { color: var(--fg-muted); font-style: italic; }
+.agent-quote-bar { color: var(--accent-2); font-style: normal; }
+.agent-rule, .agent-table-border { color: var(--fg-dim); }
 .line.agent-thought { color: var(--fg-dim); font-style: italic; }
 .line.agent-output { color: var(--fg-muted); }
 .line.agent-info { color: var(--fg-dim); }

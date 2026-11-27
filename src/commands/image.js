@@ -30,6 +30,8 @@ const MIME = {
 };
 
 export const isImageFile = (path) => Object.prototype.hasOwnProperty.call(MIME, extension(path).toLowerCase());
+/** The MIME type of an image file, from its extension (null if it isn't one). */
+export const imageMimeType = (path) => (isImageFile(path) ? MIME[extension(path).toLowerCase()] : null);
 
 const userError = (msg) => new PolymerError('user-error', msg);
 

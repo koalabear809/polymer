@@ -17,6 +17,7 @@
 
 import { defvar, getVarOr } from '../core/registry.js';
 import { currentBuffer } from '../core/buffer.js';
+import { readClipboardText, writeClipboardText } from '../core/clipboard.js';
 
 defvar('vim-clipboard', true, {
   doc: 'When true, yanks and deletes without an explicit register are also copied to the system clipboard.',
@@ -30,11 +31,8 @@ export function setReadOnlyRegister(name, text) {
 }
 
 function copyToClipboard(text) {
-  try {
-    navigator.clipboard?.writeText(text)?.catch(() => {});
-  } catch {
-    // Clipboard access can fail outside a user gesture; the internal register still works.
-  }
+  // If the system clipboard fails, the internal register still holds the text.
+  Promise.resolve().then(() => writeClipboardText(text)).catch((e) => console.warn('clipboard write failed:', e));
 }
 
 /**
@@ -82,7 +80,7 @@ export function storeRegister(name, text, type, kind) {
 export async function getRegister(name = '"') {
   if (name === '+' || name === '*') {
     try {
-      const text = await navigator.clipboard.readText();
+      const text = await readClipboardText();
       return { text, type: text.endsWith('\n') ? 'line' : 'char' };
     } catch {
       return registers.get(name) ?? null;

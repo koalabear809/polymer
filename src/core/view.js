@@ -120,6 +120,7 @@ function lineDecorations(buf, line, start, text) {
   const decos = [];
   const virtual = [];  // { at, text, face, before }
   const lineFaces = [];
+  const images = [];    // { src, alt }: pictures shown below the line
   for (const ov of overlaysIn(buf, start, end)) {
     const p = ov.props;
     if (p.lineFace) lineFaces.push(p.lineFace);
@@ -140,13 +141,16 @@ function lineDecorations(buf, line, start, text) {
       for (const x of d(buf, line, start, text) ?? []) {
         // { lineFace } styles the whole line (full width), like an overlay's lineFace.
         if (x.lineFace) lineFaces.push(x.lineFace);
+        else if (x.image) images.push(x.image);
+        // { before: 'text', at, face }: display-only text before column `at` (default 0).
+        else if (x.before !== undefined) virtual.push({ at: x.at ?? 0, text: x.before, face: x.face ?? '', before: true, priority: x.priority ?? 0 });
         else decos.push({ priority: 0, ...x });
       }
     } catch (e) {
       console.error('decorator failed:', e);
     }
   }
-  return { decos, virtual, lineFaces };
+  return { decos, virtual, lineFaces, images };
 }
 
 function virtualSpan(v) {
@@ -196,26 +200,131 @@ function renderLineText(text, decos, virtual) {
   return lt;
 }
 
-function renderLine(buf, line, { gutterChars, gutterPx, numbers, pointLine, hl, wrapped }) {
-  const el = document.createElement('div');
-  el.className = 'line';
-  if (wrapped) el.classList.add('wrapped');
+/** Everything a rendered line shows (text, decorations, gutter), without building it. */
+function lineData(buf, line, { gutterChars, gutterPx, numbers, pointLine, hl }) {
   const text = buf.lineText(line);
-  const start = buf.lineStart(line);
-  const { decos, virtual, lineFaces } = lineDecorations(buf, line, start, text);
-  if (hl && line === pointLine) el.classList.add('hl-line');
-  for (const f of lineFaces) el.classList.add(...f.split(/\s+/).filter(Boolean));
-  const g = document.createElement('span');
-  g.className = line === pointLine ? 'gutter current' : 'gutter';
-  g.style.width = `${gutterPx}px`;
+  const { decos, virtual, lineFaces, images } = lineDecorations(buf, line, buf.lineStart(line), text);
+  let gutter = '';
   if (gutterChars) {
     let n = line + 1;
     if (numbers === 'relative' && line !== pointLine) n = Math.abs(line - pointLine);
-    g.textContent = String(n).padStart(gutterChars - 1);
+    gutter = String(n).padStart(gutterChars - 1);
   }
+  const current = line === pointLine;
+  return { line, text, decos, virtual, lineFaces, images, gutter, gutterPx, current, hlLine: !!(hl && current) };
+}
+
+/** Lines with equal signatures render identically, so an existing element can be kept. */
+const lineSignature = (d) => JSON.stringify([
+  d.text, d.decos, d.virtual, d.lineFaces, d.images.map((im) => im.src), d.line, d.gutter, d.gutterPx, d.current, d.hlLine,
+]);
+
+function buildLine(d, win, wrapped) {
+  const el = document.createElement('div');
+  el.className = 'line';
+  if (wrapped) el.classList.add('wrapped');
+  if (d.hlLine) el.classList.add('hl-line');
+  for (const f of d.lineFaces) el.classList.add(...f.split(/\s+/).filter(Boolean));
+  const g = document.createElement('span');
+  g.className = d.current ? 'gutter current' : 'gutter';
+  g.style.width = `${d.gutterPx}px`;
+  if (d.gutter) g.textContent = d.gutter;
   el.appendChild(g);
-  el.appendChild(renderLineText(text, decos, virtual));
+  el.appendChild(renderLineText(d.text, d.decos, d.virtual));
+  if (wrapped && d.images.length) {
+    el.classList.add('has-images');
+    el.appendChild(imageBlock(win, d.images, d.gutterPx, d.line));
+  }
   return el;
+}
+
+function renderLine(buf, line, opts) {
+  return buildLine(lineData(buf, line, opts), opts.win, opts.wrapped);
+}
+
+/**
+ * Soft-wrapped buffers have every line in the DOM (the browser lays them out, so their
+ * heights are unknown). Rebuilding them all on each keystroke costs ~100ms in a long agent
+ * conversation, so only the changed run of lines is replaced: lines that match the last
+ * render at the start and at the end keep their elements.
+ */
+function renderWrappedLines(win, buf, opts) {
+  const n = buf.lineCount;
+  const data = new Array(n);
+  const sigs = new Array(n);
+  for (let i = 0; i < n; i++) {
+    data[i] = lineData(buf, i, opts);
+    sigs[i] = lineSignature(data[i]);
+  }
+  const prev = win.wrappedRender;
+  const reusable = prev && prev.buf === buf && prev.epoch === epoch
+    && prev.els.length === win.linesEl.children.length && (!prev.els.length || prev.els[0].parentNode === win.linesEl);
+  let els;
+  if (!reusable) {
+    els = data.map((d) => buildLine(d, win, true));
+    win.linesEl.replaceChildren(...els);
+  } else {
+    const old = prev.sigs;
+    const max = Math.min(n, old.length);
+    let head = 0;
+    while (head < max && old[head] === sigs[head]) head++;
+    let tail = 0;
+    while (tail < max - head && old[old.length - 1 - tail] === sigs[n - 1 - tail]) tail++;
+    const fresh = [];
+    for (let i = head; i < n - tail; i++) fresh.push(buildLine(data[i], win, true));
+    const anchor = prev.els[prev.els.length - tail] ?? null; // first kept element after the change
+    for (const el of prev.els.slice(head, prev.els.length - tail)) el.remove();
+    if (fresh.length) {
+      const frag = document.createDocumentFragment();
+      frag.append(...fresh);
+      win.linesEl.insertBefore(frag, anchor);
+    }
+    els = [...prev.els.slice(0, head), ...fresh, ...prev.els.slice(prev.els.length - tail)];
+  }
+  win.wrappedRender = { buf, epoch, sigs, els };
+  win.lineEls = new Map(els.map((el, i) => [i, el]));
+}
+
+// ---------------------------------------------------------------------------
+// Images under lines
+//
+// A decorator can return { image: { src, alt } } to show a picture below that line (only
+// in soft-wrapped buffers, whose lines are laid out by the browser and can be any height).
+// Each window keeps its <img> elements per src, so re-rendering a line moves the same
+// (already loaded) element instead of reloading it, which would flicker and jump.
+
+const imageCaches = new WeakMap(); // window -> Map(src -> HTMLImageElement)
+const IMAGE_CACHE_MAX = 64;
+
+function imageElement(win, { src, alt }, key) {
+  let imageCache = imageCaches.get(win);
+  if (!imageCache) imageCaches.set(win, (imageCache = new Map()));
+  let img = imageCache.get(key);
+  if (!img || img.dataset.src !== src) {
+    img = document.createElement('img');
+    img.decoding = 'async';
+    img.alt = alt ?? '';
+    // Its height is unknown until it loads; redisplay then so the cursor lands right.
+    img.addEventListener('load', () => scheduleRedisplay(), { once: true });
+    img.addEventListener('error', () => img.classList.add('broken'), { once: true });
+    img.dataset.src = src;
+    img.src = src;
+    imageCache.set(key, img);
+    if (imageCache.size > IMAGE_CACHE_MAX) imageCache.delete(imageCache.keys().next().value);
+  } else {
+    imageCache.delete(key); // most recently used goes last
+    imageCache.set(key, img);
+  }
+  return img;
+}
+
+function imageBlock(win, images, gutterPx, line) {
+  const box = document.createElement('div');
+  box.className = 'line-images';
+  box.style.paddingLeft = `${gutterPx}px`;
+  box.dataset.virtual = '1';
+  images.forEach((im, k) => box.appendChild(imageElement(win, im, `${line}:${k}:${im.src}`)));
+  return box;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,12 +407,11 @@ export function offsetFromEvent(win, e) {
         if (lt && lt.contains(r.startContainer)) {
           const text = buf.lineText(lineNum);
           let col = 0;
-          const walker = document.createTreeWalker(lt, NodeFilter.SHOW_TEXT, {
-            acceptNode: (n) => (n.parentElement?.closest('[data-virtual]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
-          });
+          const walker = document.createTreeWalker(lt, NodeFilter.SHOW_TEXT);
           for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-            if (n === r.startContainer) { col += r.startOffset; break; }
-            col += n.length;
+            const virtual = n.parentElement?.closest('[data-virtual]');
+            if (n === r.startContainer) { if (!virtual) col += r.startOffset; break; } // a click on display text lands next to it
+            if (!virtual) col += n.length;
           }
           return buf.lineStart(lineNum) + Math.min(col, text.length);
         }
@@ -480,15 +588,20 @@ export function renderView(win, selected, point) {
   
   const key = `${epoch}|${buf.version}|${first}|${last}|${hl ? pos.line : -1}|${numbers === 'relative' ? pos.line : ''}|${gutterChars}|${tabWidth}|${wrapped}`;
   if (key !== win.renderKey || win.renderedBuffer !== buf) {
-    const opts = { gutterChars, gutterPx, numbers, pointLine: pos.line, hl, wrapped };
-    const els = [];
-    win.lineEls = new Map();
-    for (let i = first; i <= last; i++) {
-      const el = renderLine(buf, i, opts);
-      win.lineEls.set(i, el);
-      els.push(el);
+    const opts = { win, gutterChars, gutterPx, numbers, pointLine: pos.line, hl, wrapped };
+    if (wrapped) {
+      renderWrappedLines(win, buf, opts);
+    } else {
+      win.wrappedRender = null;
+      const els = [];
+      win.lineEls = new Map();
+      for (let i = first; i <= last; i++) {
+        const el = renderLine(buf, i, opts);
+        win.lineEls.set(i, el);
+        els.push(el);
+      }
+      win.linesEl.replaceChildren(...els);
     }
-    win.linesEl.replaceChildren(...els);
     
     // Position based on whether we're wrapping
     if (wrapped) {
@@ -580,6 +693,13 @@ export function renderView(win, selected, point) {
               cy = rect.top - bodyRect.top + body.scrollTop;
               w = cw;
             }
+          } else if (lt.lastElementChild?.dataset.virtual) {
+            // No real text, only display text (e.g. an agent's empty "❯ " input line): after it.
+            const r = lt.lastElementChild.getBoundingClientRect();
+            const bodyRect = body.getBoundingClientRect();
+            cx = r.right - bodyRect.left + body.scrollLeft;
+            cy = r.top - bodyRect.top + body.scrollTop;
+            w = cw;
           } else {
             // Fallback to old method
             const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth);

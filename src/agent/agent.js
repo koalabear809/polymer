@@ -25,6 +25,8 @@ import {
 import { AcpClient } from './acp.js';
 import { viewMetrics } from '../core/view.js';
 import { highlightSnippet } from '../syntax/treesit.js';
+import { renderMarkdown } from './markdown.js';
+import { imageMimeType } from '../commands/image.js';
 
 defvar('agent-definitions', {
   'claude-code': { label: 'Claude Code', command: 'npx', args: ['-y', '@agentclientprotocol/claude-agent-acp'] },
@@ -45,6 +47,7 @@ defvar('agent-thought-level', 'full', { doc: 'How much of the agent\'s thinking 
 defvar('agent-models', {}, { doc: 'Extra model labels, merged over what the agent reports: { id: { label, description } }. Normally empty; the session\'s own model list is used.' });
 defvar('agent-default-model', null, { doc: 'Model ID to switch new agent sessions to (nil keeps the agent\'s own default).' });
 defvar('agent-wrap-column', 0, { doc: 'Hard-wrap agent text at this column so wrapped lines are real lines: "auto" (window width), a number, or 0 to disable (default; agent buffers soft-wrap and reflow on resize).' });
+defvar('agent-render-markdown', true, { doc: 'Show the agent\'s Markdown formatted (markup hidden, lists as bullets, tables drawn as boxes) rather than as raw text with highlighting. Saved transcripts are always the raw Markdown.' });
 defvar('agent-steer-presets', {
   concise: { label: 'Concise', prompt: 'Be extremely concise in your responses. Provide only essential information.' },
   verbose: { label: 'Verbose', prompt: 'Be detailed and thorough in your explanations. Include examples and context.' },
@@ -53,7 +56,11 @@ defvar('agent-steer-presets', {
   code: { label: 'Code-focused', prompt: 'Focus on writing clean, well-documented code. Prioritize code quality.' },
 }, { doc: 'Preset steering prompts. Keys are preset IDs, values are { label, prompt }.' });
 defvar('agent-thoughts-collapsed', false, { doc: 'Show thinking sections collapsed to one line by default (TAB on one toggles it; S-TAB toggles all).' });
-defvar('agent-show-banner', true, { doc: 'Show session banner with model, effort, and cost information.' });
+defvar('agent-show-banner', true, { doc: 'Show the session header line at the top of agent windows (its contents: agent-header-fields).' });
+defvar('agent-blank-line-height', 0.6, { doc: 'Height of blank lines between parts of the conversation, as a fraction of a line (1 = a full line).' });
+defvar('agent-header-fields', ['model', 'effort', 'tokens', 'cost'], {
+  doc: 'What the agent header line shows, in order. Fields: "model", "effort", "mode" (e.g. plan), "tokens" (input/output this session), "context" (tokens in the context window / its size), "cost" (the session\'s total, as the agent reports it).',
+});
 defvar('agent-token-costs', {
   'claude-opus-4': { input: 15, output: 75 },
   'claude-sonnet-4': { input: 3, output: 15 },
@@ -72,7 +79,6 @@ function tidyLines(text) {
   while (out.at(-1) === '') out.pop();
   return out;
 }
-const FENCE = /^\s*```([\w+#.-]+)?\s*$/;
 
 export function defineAgent(name, def) {
   setq('agent-definitions', { ...getVarOr('agent-definitions', {}, null), [name]: def }, null);
@@ -135,21 +141,26 @@ function modelsFor(b) {
   return out;
 }
 
-/** Columns available in the window showing b (null if unknown / disabled). */
-function wrapWidth(b) {
-  const setting = getVarOr('agent-wrap-column', 0, b);
-  if (setting === 0 || setting === false) return null;
-  if (typeof setting === 'number') return setting;
+/** Text columns in the window showing b (100 if it isn't shown or can't be measured). */
+function windowColumns(b) {
   const win = windowList().find((w) => w.buffer === b && w.bodyEl?.clientWidth) ?? windowList().find((w) => w.buffer === b);
   const px = win?.bodyEl?.clientWidth;
   const { cw } = viewMetrics();
   return px && cw ? Math.max(20, Math.floor(px / cw) - 2) : 100;
 }
 
+/** Column to hard-wrap agent text at (null if disabled). */
+function wrapWidth(b) {
+  const setting = getVarOr('agent-wrap-column', 0, b);
+  if (setting === 0 || setting === false) return null;
+  if (typeof setting === 'number') return setting;
+  return windowColumns(b);
+}
+
 /** Split text into display segments: [{ text, start, end, indent }] (indent = prefix added to continuations). */
 function wrapSegments(text, width) {
   if (!width || text.length <= width) return [{ text, start: 0, end: text.length, indent: 0 }];
-  const lead = /^(?:\s*(?:│ )?(?:[-*•]\s+|\d+[.)]\s+)?)/.exec(text)[0];
+  const lead = /^(?:\s*(?:│ )*(?:[-*•◦▪]\s+|\d+[.)]\s+)?(?:[☐☑]\s+)?)/.exec(text)[0];
   const pad = ' '.repeat(Math.min(lead.length, Math.floor(width / 2)));
   const segs = [];
   let pos = 0;
@@ -166,21 +177,108 @@ function wrapSegments(text, width) {
   return segs;
 }
 
+// ---------------------------------------------------------------------------
+// Images
+
+/** A blob: URL for an image { mimeType, data (base64) }, made once and kept on the object. */
+function imageUrl(im) {
+  if (!im.url) {
+    const bin = atob(im.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    im.url = URL.createObjectURL(new Blob([bytes], { type: im.mimeType || 'image/png' }));
+  }
+  return im.url;
+}
+
+const fileImages = new Map(); // path -> blob: URL, or null while loading / if it failed
+
+/**
+ * What to show for ![alt](src) in the agent's Markdown: data: URLs and local image files
+ * (absolute, file://, or relative to the agent's directory). Remote images aren't loaded
+ * (the webview's CSP blocks them); null also while a file is still being read.
+ */
+function markdownImageUrl(b, src) {
+  if (/^data:image\//i.test(src)) return src;
+  if (/^[a-z][\w+.-]+:/i.test(src) && !/^file:/i.test(src)) return null; // http:, https:, ... (C: has a 1-letter scheme, so it falls through)
+  let path = src.replace(/^file:\/\//i, '');
+  try { path = decodeURIComponent(path); } catch { /* keep it as written */ }
+  if (/^\/[A-Za-z]:/.test(path)) path = path.slice(1); // file:///C:/x -> C:/x
+  path = expandFileName(path.replace(/\\/g, '/'), asDirectory(b.agent.cwd));
+  const type = imageMimeType(path);
+  if (!type || !isTauri) return null;
+  if (fileImages.has(path)) return fileImages.get(path);
+  fileImages.set(path, null);
+  invoke('read_binary_file', { path })
+    .then((buf) => { fileImages.set(path, URL.createObjectURL(new Blob([buf], { type }))); scheduleRedraw(b); })
+    .catch(() => {});
+  return null;
+}
+
+/** A pasted image: attach it to the next message and mark its place in the input. */
+function attachImage(b, image) {
+  const a = b.agent;
+  if (!a.client?.agentCapabilities?.promptCapabilities?.image) {
+    throw userError(a.sessionId ? `${a.label} doesn't accept images` : `${a.label} isn't connected yet`);
+  }
+  const n = a.nextImage++;
+  a.attachments.push({ n, ...image });
+  if (b.point.pos < b.readOnlyBefore.pos) b.point.set(b.length);
+  b.insert(`[image #${n}] `);
+  scheduleRedraw(b);
+}
+
+/** 12345 -> "12.3k", 1000000 -> "1M". */
+function compactNumber(n) {
+  if (n >= 1e6) return `${+(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`;
+  if (n >= 1e3) return `${+(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
+  return String(n);
+}
+
+/** Header fields (agent-header-fields): name -> (agent, buffer, modelInfo, mode) -> text or null. */
+const HEADER_FIELDS = {
+  model: (a, b, modelInfo) => `Model: ${modelInfo?.label || a.currentModel || 'unknown'}`,
+  effort: (a) => {
+    const e = a.effortOption && flatChoices(a.effortOption).find((o) => o.value === a.effortOption.currentValue);
+    return e ? `Effort: ${e.name ?? e.value}` : null;
+  },
+  mode: (a, b, modelInfo, mode) => (mode ? `Mode: ${mode.name}` : null),
+  tokens: (a) => `Tokens: ${(a.tokens.input + a.tokens.output).toLocaleString()} (in: ${a.tokens.input.toLocaleString()}, out: ${a.tokens.output.toLocaleString()})`,
+  // Tokens in the context window / its size, as the agent reports them (usage_update).
+  context: (a) => {
+    const c = a.context;
+    if (!c?.size) return 'Context: –';
+    return `Context: ${compactNumber(c.used ?? 0)} / ${compactNumber(c.size)} (${Math.round(((c.used ?? 0) / c.size) * 100)}%)`;
+  },
+  // The session's total cost as the agent reports it; otherwise estimated from agent-token-costs.
+  cost: (a, b) => {
+    if (a.cost?.amount !== undefined) {
+      return a.cost.currency && a.cost.currency !== 'USD' ? `Cost: ${a.cost.amount.toFixed(4)} ${a.cost.currency}` : `Cost: $${a.cost.amount.toFixed(4)}`;
+    }
+    const costs = a.currentModel && getVarOr('agent-token-costs', {}, b)[a.currentModel];
+    if (!costs) return 'Cost: –';
+    return `Cost: ~$${((a.tokens.input / 1e6) * costs.input + (a.tokens.output / 1e6) * costs.output).toFixed(4)}`;
+  },
+};
+
 function render(b) {
   const a = b.agent;
   const wrapAt = wrapWidth(b);
   const lines = [];
-  const meta = []; // per line: { decos, lineFace, item }
-  const push = (text, extra = {}) => {
-    for (const seg of wrapSegments(text, wrapAt)) {
+  const meta = []; // per line: { decos, lineFace, item, images }
+  const push = (text, { images, ...extra } = {}) => {
+    const segs = wrapSegments(text, wrapAt);
+    segs.forEach((seg, k) => {
       const decos = extra.decos?.flatMap((d) => {
         const from = Math.max(d.from, seg.start), to = Math.min(d.to, seg.end);
         return to > from || (d.from === d.to && d.from >= seg.start && d.from <= seg.end)
           ? [{ ...d, from: from - seg.start + seg.indent, to: to - seg.start + seg.indent }] : [];
       });
       lines.push(seg.text);
-      meta.push(decos ? { ...extra, decos } : extra);
-    }
+      const m = decos ? { ...extra, decos } : { ...extra };
+      if (images?.length && k === segs.length - 1) m.images = images; // pictures go under the last row
+      meta.push(m);
+    });
   };
   const maxOut = getVarOr('agent-tool-output-lines', 12, b);
   const indentAll = (text, prefix, face, item) => {
@@ -203,22 +301,8 @@ function render(b) {
   // Build header line content (shown at top of window, not in buffer)
   let headerLine = null;
   if (getVarOr('agent-show-banner', true, b) && a.sessionId) {
-    const effort = a.effortOption && flatChoices(a.effortOption).find((o) => o.value === a.effortOption.currentValue);
-    const tokenCosts = getVarOr('agent-token-costs', {}, b);
-    const costs = a.currentModel && tokenCosts[a.currentModel];
-    
-    const totalTokens = a.tokens.input + a.tokens.output;
-    const inputCost = costs ? (a.tokens.input / 1_000_000) * costs.input : 0;
-    const outputCost = costs ? (a.tokens.output / 1_000_000) * costs.output : 0;
-    const totalCost = inputCost + outputCost;
-    
-    const bannerParts = [
-      `Model: ${modelInfo?.label || a.currentModel || 'unknown'}`,
-      effort && `Effort: ${effort.name ?? effort.value}`,
-      `Tokens: ${totalTokens.toLocaleString()} (in: ${a.tokens.input.toLocaleString()}, out: ${a.tokens.output.toLocaleString()})`,
-      costs && `Cost: $${totalCost.toFixed(4)}`,
-    ].filter(Boolean);
-    
+    const fields = getVarOr('agent-header-fields', ['model', 'effort', 'tokens', 'cost'], b);
+    const bannerParts = fields.map((f) => HEADER_FIELDS[f]?.(a, b, modelInfo, mode)).filter(Boolean);
     headerLine = `Session  │  ${bannerParts.join('  │  ')}`;
   }
 
@@ -229,59 +313,26 @@ function render(b) {
       || (item.type === 'assistant' && !item.text.trim())) continue;
     const grouped = (item.type === 'assistant' || item.type === 'thought') && prevType === 'tool';
     if (!(item.type === 'tool' && prevType === 'tool') || grouped) push('');
+    if (item.type === 'user' && prevType) push(''); // a wider gap where each new turn starts
     prevType = item.type;
     if (item.type === 'user') {
-      const [first, ...rest] = item.text.split('\n');
-      push(`${PROMPT}${first}`, { decos: [{ from: 0, to: PROMPT.length + first.length, face: 'agent-user' }], item });
-      for (const l of rest) push(`  ${l}`, { decos: [{ from: 0, to: l.length + 2, face: 'agent-user' }], item });
+      const shown = item.text.split('\n').map((l, k) => (k ? `  ${l}` : `${PROMPT}${l}`));
+      const images = (item.images ?? []).map((im) => ({ src: imageUrl(im), alt: 'image' }));
+      shown.forEach((l, k) => push(l, { decos: [{ from: 0, to: l.length, face: 'agent-user' }], item, ...(k === shown.length - 1 ? { images } : {}) }));
     } else if (item.type === 'assistant') {
-      const textLines = [];
-      { // Collapse blank runs (outside code blocks) and trim the ends.
-        let fenced = false;
-        for (const l of item.text.split('\n')) {
-          if (FENCE.test(l)) fenced = !fenced;
-          if (!fenced && !l.trim()) { if (textLines.length && textLines.at(-1) !== '') textLines.push(''); } else textLines.push(fenced ? l : l.replace(/\s+$/, ''));
-        }
-        while (textLines.at(-1) === '') textLines.pop();
+      const md = renderMarkdown(item.text, {
+        raw: !getVarOr('agent-render-markdown', true, b),
+        columns: wrapAt ?? windowColumns(b),
+        highlight: (lang, code) => highlightSnippet(lang, code, () => scheduleRedraw(b)),
+      });
+      for (const l of md) {
+        const images = l.decos.filter((d) => d.picture).map((d) => ({ src: markdownImageUrl(b, d.url), alt: d.alt })).filter((im) => im.src);
+        push(l.text, { decos: l.decos, item, images, ...(l.lineFace ? { lineFace: l.lineFace } : {}) });
       }
-      // Pass 1: find fenced blocks and highlight each one as a whole (tree-sitter needs full context).
-      const blocks = new Map(); // fence-open line -> { lang, hl, first }
-      for (let i = 0; i < textLines.length; i++) {
-        const open = FENCE.exec(textLines[i]);
-        if (!open) continue;
-        let j = i + 1;
-        while (j < textLines.length && !FENCE.test(textLines[j])) j++;
-        const code = textLines.slice(i + 1, j).join('\n');
-        const hl = open[1] ? highlightSnippet(open[1], code, () => scheduleRedraw(b)) : null;
-        blocks.set(i, { hl, end: j });
-        i = j;
-      }
-      // Pass 2: emit lines.
-      let block = null;
-      for (let i = 0; i < textLines.length; i++) {
-        const l = textLines[i];
-        const decos = [];
-        let extra = {};
-        if (blocks.has(i) && !block) {
-          block = { ...blocks.get(i), start: i };
-          decos.push({ from: 0, to: l.length, face: 'agent-dim' });
-          extra = { lineFace: 'agent-codeline' };
-        } else if (block && i === block.end) {
-          decos.push({ from: 0, to: l.length, face: 'agent-dim' });
-          extra = { lineFace: 'agent-codeline' };
-          block = null;
-        } else if (block) {
-          const row = i - block.start - 1;
-          if (block.hl) decos.push(...(block.hl.get(row) ?? []));
-          extra = { lineFace: 'agent-codeline' };
-        } else if (/^#{1,6}\s/.test(l)) {
-          decos.push({ from: 0, to: l.length, face: 'agent-heading' });
-        } else {
-          for (const m of l.matchAll(/`[^`]+`/g)) decos.push({ from: m.index, to: m.index + m[0].length, face: 'agent-code' });
-          for (const m of l.matchAll(/\*\*[^*]+\*\*/g)) decos.push({ from: m.index, to: m.index + m[0].length, face: 'agent-bold' });
-        }
-        push(l, { decos, item, ...extra });
-      }
+    } else if (item.type === 'image') {
+      const src = item.data ? imageUrl(item) : null;
+      const label = src ? '[image]' : `[image: ${item.uri ?? item.mimeType}]`;
+      push(label, { decos: [{ from: 0, to: label.length, face: 'agent-dim' }], item, images: src ? [{ src, alt: 'image' }] : [] });
     } else if (item.type === 'thought') {
       const thoughtLevel = getVarOr('agent-thought-level', 'full', b);
       if (thoughtLevel !== 'none') {
@@ -309,6 +360,10 @@ function render(b) {
       const text = `  ${icon} ${item.title ?? item.kind ?? 'tool'}`;
       push(`${text}${where}`, { decos: [{ from: 2, to: 3, face: `agent-status-${item.status}` }, { from: 4, to: text.length, face: 'agent-tool' }, { from: text.length, to: text.length + where.length, face: 'agent-dim' }], item });
       for (const c of item.content ?? []) {
+        if (c.type === 'content' && c.content?.type === 'image' && c.content.data) {
+          push('    [image]', { lineFace: 'agent-output', item, images: [{ src: imageUrl(c.content), alt: 'image' }] });
+          continue;
+        }
         let out = [];
         if (c.type === 'diff') out = diffLines(c.oldText, c.newText);
         else if (c.type === 'content') out = blockText(c.content).split('\n');
@@ -342,14 +397,42 @@ function render(b) {
   if (a.promptQueue.length > 0) {
     push(`· Queue: ${a.promptQueue.length} prompt${a.promptQueue.length === 1 ? '' : 's'} waiting  (C-c q to view/clear)`, { lineFace: 'agent-info' });
   }
+  if (a.attachments.length) {
+    if (!status) push('');
+    for (const att of a.attachments) {
+      const label = `📎 [image #${att.n}]`;
+      const hint = '  goes with your next message (delete its [image #n] text to drop it)';
+      push(label + hint, {
+        decos: [{ from: 0, to: label.length, face: 'agent-tool' }, { from: label.length, to: label.length + hint.length, face: 'agent-dim' }],
+        images: [{ src: imageUrl(att), alt: `image #${att.n}` }],
+      });
+    }
+    if (!status) push('');
+  }
   // A rule (with padding) between the conversation and the input area.
   if (status) push('');
   push('─'.repeat(Math.max(10, Math.min(wrapAt ?? 80, 200))), { lineFace: 'agent-separator' });
   push('');
-  // The prompt line: "❯ " starts the editable input.
-  const transcript = `${lines.join('\n')}\n${PROMPT}`;
-  meta.push({ decos: [{ from: 0, to: PROMPT.length - 1, face: 'agent-prompt' }] });
+  // The input starts on a line of its own, so vim line commands (dd, yy, o, O, cc, 0, ...)
+  // work on it as in any buffer. Its "❯ " is display-only (see the decorator in openAgent).
+  const transcript = `${lines.join('\n')}\n`;
   return { transcript, meta, headerLine };
+}
+
+/**
+ * The transcript above the input grew or shrank by `delta`: move the input's undo records
+ * with it. (Undo works on absolute offsets and ignores read-only, so stale records would
+ * edit the transcript.)
+ */
+function shiftUndo(b, from, delta) {
+  const move = (g) => {
+    for (const c of g.changes) if (c.from >= from) c.from += delta;
+    if (g.pointBefore >= from) g.pointBefore += delta;
+    if (g.pointAfter >= from) g.pointAfter += delta;
+  };
+  for (const g of b.undoList ?? []) move(g);
+  for (const g of b.redoList ?? []) move(g);
+  if (b.undoGroup) move(b.undoGroup);
 }
 
 /** Redraw the read-only part, leaving the input alone. Only the changed tail is replaced. */
@@ -357,6 +440,7 @@ function redraw(b) {
   const a = b.agent;
   if (!a || !b.live) return;
   const { transcript, meta, headerLine } = render(b);
+  document.documentElement.style.setProperty('--agent-gap', String(getVarOr('agent-blank-line-height', 0.6, b)));
   const inputStart = b.readOnlyBefore.pos;
   const old = b.getText(0, inputStart);
   let i = 0;
@@ -371,6 +455,7 @@ function redraw(b) {
     b.replaceText(i, inputStart, transcript.slice(i), { inhibitReadOnly: true, undo: false });
   }
   b.readOnlyBefore.set(transcript.length);
+  if (transcript.length !== inputStart) shiftUndo(b, inputStart, transcript.length - inputStart);
   a.meta = meta;
   if (inInput) b.point.set(b.length - fromEnd);
   else if (before) b.point.set(b.offsetAt(before.line, before.col));
@@ -418,6 +503,10 @@ function onUpdate(b, { update }) {
   if (!update) return;
   switch (update.sessionUpdate) {
     case 'agent_message_chunk': {
+      if (update.content?.type === 'image') {
+        a.items.push({ type: 'image', mimeType: update.content.mimeType, data: update.content.data, uri: update.content.uri });
+        break;
+      }
       const item = lastItem(a, 'assistant') ?? (a.items.push({ type: 'assistant', text: '' }), a.items.at(-1));
       item.text += blockText(update.content);
       break;
@@ -455,6 +544,11 @@ function onUpdate(b, { update }) {
       break;
     case 'current_mode_update':
       a.currentMode = update.currentModeId;
+      break;
+    case 'usage_update':
+      // Context window use, and (at the end of a turn) the session's total cost.
+      a.context = { used: update.used, size: update.size };
+      if (update.cost) a.cost = update.cost;
       break;
     default:
       return;
@@ -511,12 +605,18 @@ export async function openAgent({ name = getVarOr('agent-default', 'claude-code'
     modes: null, currentMode: null, currentModel: null, models: null, 
     commands: [], client: null, sessionId: null, promptQueue: [], processingQueue: false,
     steerPrompts: [], // Active steering prompts
-    tokens: { input: 0, output: 0 } // Token usage tracking
+    tokens: { input: 0, output: 0 }, // Token usage tracking
+    attachments: [], nextImage: 1, // pasted images waiting to be sent: [{ n, mimeType, data }]
   };
+  b.onPasteImage = (image) => attachImage(b, image);
   b.decorators.push((buf, line) => {
+    // Input lines: the prompt (and an indent on continuation lines) is display-only text.
+    const inputLine = buf.lineAt(buf.readOnlyBefore.pos);
+    if (line >= inputLine) return [line === inputLine ? { before: PROMPT, face: 'agent-prompt' } : { before: ' '.repeat(PROMPT.length) }];
     const m = buf.agent?.meta?.[line];
     if (!m) return [];
-    return [...(m.decos ?? []), ...(m.lineFace ? [{ lineFace: m.lineFace }] : [])];
+    if (!m.lineFace && !m.images && buf.lineText(line) === '') return [{ lineFace: 'agent-gap' }]; // a shorter blank line
+    return [...(m.decos ?? []), ...(m.lineFace ? [{ lineFace: m.lineFace }] : []), ...(m.images ?? []).map((image) => ({ image }))];
   });
   redraw(b);
   if (display) setWindowBuffer(selectedWindow(), b);
@@ -588,6 +688,8 @@ async function newSession(b) {
   try {
     const res = await a.client.newSession(a.cwd.replace(/\/$/, '') || '/', await mcpServersFor(b));
     a.sessionId = res.sessionId;
+    a.context = null; // filled in by the agent's usage updates
+    a.cost = null;
     a.modes = res.modes ?? null;
     a.currentMode = res.modes?.currentModeId ?? null;
     // Newer agents report models as a "model" config option; older ones as `models`.
@@ -646,7 +748,7 @@ function requireAgent() {
 }
 
 /** Turn "@path" mentions into resource links the agent can read. */
-async function promptBlocks(text, cwd, steerPrompts = []) {
+async function promptBlocks(text, cwd, steerPrompts = [], images = []) {
   const blocks = [];
   
   // Add steering prompts first (as system-level guidance)
@@ -656,6 +758,7 @@ async function promptBlocks(text, cwd, steerPrompts = []) {
   }
   
   blocks.push({ type: 'text', text });
+  for (const im of images) blocks.push({ type: 'image', mimeType: im.mimeType, data: im.data });
   
   const seen = new Set();
   for (const m of text.matchAll(/(?:^|\s)@([^\s]+)/g)) {
@@ -727,21 +830,28 @@ export async function agentSend(b, text, options = {}) {
   const a = b.agent;
   const { skipQueue = false } = options;
   const inputStart = b.readOnlyBefore.pos;
-  if (text === undefined) {
+  const fromInput = text === undefined; // else (the queue) the input holds a draft that stays
+  if (fromInput) {
     text = b.getText(inputStart, b.length).trim();
     if (!text) return;
   }
   if (a.dead || !a.sessionId) throw userError(`${a.label} isn't connected (M-x agent-restart)`);
   if (a.busy && !skipQueue) throw userError(`${a.label} is still working (C-c C-k to cancel)`);
-  b.deleteText(inputStart, b.length, { undo: false });
-  a.items.push({ type: 'user', text });
+  if (fromInput) {
+    b.deleteText(inputStart, b.length, { undo: false });
+    // Undo history belongs to the message just sent; it would reinsert stale text.
+    b.undoList = []; b.redoList = []; b.undoGroup = null;
+  }
+  const images = a.attachments.filter((x) => text.includes(`[image #${x.n}]`));
+  a.attachments = a.attachments.filter((x) => !images.includes(x));
+  a.items.push({ type: 'user', text, ...(images.length ? { images } : {}) });
   a.busy = true;
   a.turn = { text, stderr: '', start: a.items.length };
   redraw(b);
   scheduleTranscriptSave(b);
   b.point.set(b.length);
   try {
-    const res = await a.client.prompt(a.sessionId, await promptBlocks(text, a.cwd, a.steerPrompts));
+    const res = await a.client.prompt(a.sessionId, await promptBlocks(text, a.cwd, a.steerPrompts, images));
     await finishTurn(b);
     
     // Update token usage if provided
@@ -818,6 +928,7 @@ defcommand('agent-queue-prompt', { doc: 'Add the current input to the prompt que
   
   a.promptQueue.push(text);
   b.deleteText(inputStart, b.length, { undo: false });
+  b.undoList = []; b.redoList = []; b.undoGroup = null;
   message('Prompt queued (%d in queue)', a.promptQueue.length);
   scheduleRedraw(b);
   
@@ -928,8 +1039,12 @@ defcommand('agent-remove-steer', { doc: 'Remove an active steering prompt.' }, a
 defcommand('agent-return', { doc: 'RET: send when in the input; on a tool line, open its file.' }, async () => {
   const b = requireAgent();
   if (b.point.pos >= b.readOnlyBefore.pos) return agentSend(b);
-  const item = b.agent.meta[b.lineAt()]?.item;
+  const m = b.agent.meta[b.lineAt()];
+  const item = m?.item;
   if (item?.type === 'thought') return call('agent-toggle-thought');
+  const col = b.posAt(b.point.pos).col;
+  const link = m?.decos?.find((d) => d.url && d.from <= col && col < d.to);
+  if (link) return message('%s', link.url);
   const loc = item?.locations?.[0];
   if (loc?.path) {
     const { openFile } = await import('../commands/files.js');
@@ -1071,6 +1186,7 @@ defcommand('agent-new-session', { doc: 'Start a fresh conversation in this buffe
   await saveTranscript(b).catch(() => {});
   b.agent.transcript = null; // the next conversation gets its own file
   b.agent.items = [];
+  b.agent.attachments = [];
   b.agent.status = 'new session…';
   redraw(b);
   await newSession(b);
@@ -1132,8 +1248,9 @@ defcommand('agent-add-context', { doc: 'Add the current file (and selected lines
   b.touch();
 });
 
-// i/a/I/A/o in the transcript jump to the input first.
-for (const [key, cmd] of [['i', 'vim-insert'], ['a', 'vim-append'], ['I', 'vim-insert-line'], ['A', 'vim-append-line']]) {
+// i/a/I/A/o/O in the transcript jump to the end of the input (and just insert there);
+// in the input they behave as usual.
+for (const [key, cmd] of [['i', 'vim-insert'], ['a', 'vim-append'], ['I', 'vim-insert-line'], ['A', 'vim-append-line'], ['o', 'vim-open-below'], ['O', 'vim-open-above']]) {
   defcommand(`agent-${cmd}`, { doc: `${cmd}, jumping to the input first when the cursor is in the transcript.` }, () => {
     const b = requireAgent();
     if (b.point.pos < b.readOnlyBefore.pos) {
@@ -1173,6 +1290,9 @@ export function transcriptMarkdown(b) {
   for (const item of a.items) {
     if (item.type === 'user') {
       out.push('## You', '', item.text, '');
+      if (item.images?.length) out.push(`_[${item.images.length} image${item.images.length === 1 ? '' : 's'} attached]_`, '');
+    } else if (item.type === 'image') {
+      out.push(`_[image${item.uri ? `: ${item.uri}` : ''}]_`, '');
     } else if (item.type === 'assistant') {
       out.push(`## ${a.label}`, '', item.text.replace(/\n+$/, ''), '');
     } else if (item.type === 'thought') {
@@ -1274,7 +1394,6 @@ defineKey({ keymaps: 'agent-mode-map', states: 'normal' }, {
   'S-TAB': 'agent-toggle-all-thoughts',
   'z a': 'agent-toggle-thought',
   'z A': 'agent-toggle-all-thoughts',
-  'o': 'agent-vim-append-line',
 });
 defineKey({ keymaps: 'agent-mode-map', states: ['normal', 'insert'] }, {
   'C-c t': 'agent-toggle-thought',

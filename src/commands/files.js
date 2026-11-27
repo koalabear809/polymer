@@ -8,6 +8,7 @@ import { currentBuffer } from '../core/buffer.js';
 import { selectedWindow, setWindowBuffer, displayBuffer, selectWindow } from '../core/window.js';
 import { message } from '../core/echo.js';
 import { PolymerError } from '../core/errors.js';
+import { writeClipboardText } from '../core/clipboard.js';
 import {
   expandFileName, abbreviateFileName, asDirectory, stripSlash, dirname,
   listDirectory, findFileNoselect, saveBuffer, writeFile, revertBuffer, pathInfo,
@@ -137,7 +138,7 @@ export async function openFile(path, { otherWindow = false } = {}) {
 }
 
 async function copyPath(path) {
-  await navigator.clipboard.writeText(path);
+  await writeClipboardText(path);
   message('Copied %s', path);
 }
 

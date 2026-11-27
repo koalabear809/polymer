@@ -73,6 +73,7 @@ export class Buffer {
     from = this.text.clamp(from);
     to = this.text.clamp(to);
     if (from === to) return '';
+    from = this.editableFrom(from, to, opts);
     this.checkWritable(opts, from);
     runHooks('before-change-functions', this, from, to);
     const removed = this.text.delete(from, to);
@@ -82,7 +83,19 @@ export class Buffer {
     return removed;
   }
 
+  /**
+   * In an input area, a change that reaches back into the read-only text applies only to
+   * the editable part (e.g. dd on the last input line, which would take the newline before
+   * it). Returns where that part starts.
+   */
+  editableFrom(from, to, opts = {}) {
+    const ro = this.readOnlyBefore?.buffer ? this.readOnlyBefore.pos : 0;
+    return from < ro && to > ro && !opts.inhibitReadOnly && !runtimeInhibitReadOnly() ? ro : from;
+  }
+
   replaceText(from, to, str, opts = {}) {
+    if (from > to) [from, to] = [to, from];
+    from = this.editableFrom(from, to, opts);
     this.deleteText(from, to, opts);
     return this.insertText(from, str, opts);
   }

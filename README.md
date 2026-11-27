@@ -140,9 +140,19 @@ a terminal and `/login` once). Any ACP agent can be added with `defineAgent`.
 - Type after `❯`; `RET` (insert state) or `C-j` adds a newline, and `C-c C-c` (or `RET` in normal state) sends.
   Mention files with `@path`. `C-c C-k` cancels, `C-c m` switches mode (e.g. plan),
   `C-c n` new conversation, `C-c /` slash commands. `RET` on a tool line opens its file.
+  The input is ordinary text for vim: `o`/`O` open lines, `dd`, `yy`, `cc`, `p`, `u` and
+  motions work on it (the transcript above stays read-only).
 - The agent reads files through your buffers (it sees unsaved edits) and writes through
   them too (each edit is one undo step, then saved). Its shell commands run as processes
   whose output shows under the tool call. Permission requests appear as a helm prompt.
+- Replies are shown as formatted Markdown (headings, lists, tables, highlighted code;
+  `agent-render-markdown` false shows the raw text). Images the agent sends, image tool
+  results and `![](local/file.png)` references are shown inline (remote images aren't loaded).
+- The header line shows `agent-header-fields`, in order: any of `model`, `effort`, `mode`,
+  `tokens`, `context` (context window used / size) and `cost` (the session's total, as the
+  agent reports it). E.g. `setq('agent-header-fields', ['model', 'effort', 'context', 'cost'])`.
+- Paste an image (a screenshot, say) into the input to send it with your message: it is
+  attached as `[image #1]` with a preview above the input; delete that text to drop it.
 - From any file: `SPC a f` adds `@file` (and the selected lines) to the agent's input.
 - Conversations are saved as Markdown in `.polymer/agent/` under the agent's directory
   (`<start time>-<agent>.md`; tool calls with diffs and output, plans). `SPC a t` opens the
@@ -230,6 +240,9 @@ src-tauri/            Rust backend (files, processes, terminals, MCP server)
   directory (on a file it shows actions); `C-l` or `DEL` at a `/` goes up;
   `SPC f s` / `Cmd-S` save, `SPC f S` save as, `SPC f r` recent files, `SPC b r` revert
 - `M-x` / `SPC :` run a command; `SPC e l` / `SPC e b` evaluate line / buffer as JavaScript
+- System clipboard: yanks are copied to it (`vim-clipboard`). On Windows and Linux, `C-v`
+  pastes in insert state and `C-c` copies a visual selection; `C-S-v` / `C-S-c` work in any
+  state. On macOS, Cmd-V / Cmd-C.
 - `SPC h f` / `SPC h v` / `SPC h k` describe a function / variable / key
 - `SPC b b` switch buffers; in helm: `C-j`/`C-k` move, `TAB` actions, `C-SPC` mark,
   `C-z` preview, `Esc` for normal state (`j`/`k`, `gg`/`G`), `C-g` quit

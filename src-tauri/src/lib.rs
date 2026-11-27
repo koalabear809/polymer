@@ -1,3 +1,4 @@
+mod clipboard;
 mod fs;
 mod mcp;
 mod process;
@@ -53,9 +54,13 @@ pub fn run() {
         .manage(process::Processes::default())
         .plugin(tauri_plugin_process::init())
         .manage(mcp::McpServer::default())
+        .manage(clipboard::ClipboardState::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
             quit_app,
+            clipboard::clipboard_read_text,
+            clipboard::clipboard_write_text,
+            clipboard::clipboard_read_image,
             fs::read_text_file,
             fs::read_binary_file,
             fs::write_text_file,

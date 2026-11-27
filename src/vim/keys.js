@@ -2,6 +2,7 @@
 // operator-pending states inherit.
 
 import { defineKey } from '../core/keymap.js';
+import { isMac } from '../core/clipboard.js';
 
 // ---------------------------------------------------------------------------
 // Motions (normal, visual, operator-pending)
@@ -219,3 +220,14 @@ defineKey({ keymaps: 'global', states: 'replace' }, {
   'DEL': 'vim-replace-backspace',
   'RET': 'newline',
 });
+
+// ---------------------------------------------------------------------------
+// System clipboard. macOS uses Cmd-C / Cmd-V (handled natively); elsewhere Ctrl is the
+// clipboard modifier, so Ctrl-V pastes in insert state and Ctrl-C copies a selection.
+// Ctrl-Shift-C / Ctrl-Shift-V work in every state (normal-state Ctrl-V stays visual block).
+
+if (!isMac) {
+  defineKey({ keymaps: 'global', states: ['insert', 'replace'] }, { 'C-v': 'clipboard-paste' });
+  defineKey({ keymaps: 'global', states: ['normal', 'visual', 'insert', 'replace'] }, { 'C-S-v': 'clipboard-paste' });
+  defineKey({ keymaps: 'global', states: 'visual' }, { 'C-c': 'vim-yank', 'C-S-c': 'vim-yank' });
+}
