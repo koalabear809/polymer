@@ -24,7 +24,6 @@ import './commands/filetree.js';
 import './commands/image.js';
 import './commands/language-modes.js';
 import { loadInitFile } from './commands/config.js';
-import './commands/default-keys.js';
 import './vim/index.js';
 import './syntax/index.js';
 import { reattachTerminals } from './terminal/term.js';
