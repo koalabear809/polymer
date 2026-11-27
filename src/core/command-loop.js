@@ -135,16 +135,6 @@ export function handleKeyEvent(e) {
   const key = keyFromEvent(e);
   if (!key) return;
   
-  // Check if a sidebar has focus - let it handle its own keys (except C-w for window nav)
-  const focused = document.activeElement;
-  if (focused && focused.classList && focused.classList.contains('sidebar')) {
-    // Allow C-w window navigation keys to work from sidebar
-    if (key !== 'C-w' && !pending.includes('C-w')) {
-      // Let the sidebar handle this key, don't process it in the command loop
-      return;
-    }
-  }
-  
   // Handle key repeat
   if (e.type === 'keydown' && e.repeat) {
     // Browser's native repeat - process the key
