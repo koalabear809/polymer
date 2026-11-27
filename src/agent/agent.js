@@ -23,6 +23,8 @@ import {
   expandFileName, abbreviateFileName, pathInfo, basename, asDirectory, makeDirectory, writeTextFile, listDirectory,
 } from '../core/files.js';
 import { AcpClient } from './acp.js';
+import { viewMetrics } from '../core/view.js';
+import { highlightSnippet } from '../syntax/treesit.js';
 
 defvar('agent-definitions', {
   'claude-code': { label: 'Claude Code', command: 'npx', args: ['-y', '@agentclientprotocol/claude-agent-acp'] },
@@ -39,13 +41,10 @@ defvar('agent-tool-output-lines', 12, { doc: 'Lines of tool output (diffs, termi
 defvar('agent-save-transcripts', true, { doc: 'Save each conversation as Markdown in agent-transcript-directory under the agent\'s directory.' });
 defvar('agent-transcript-directory', '.polymer/agent/', { doc: 'Where transcripts go, relative to the agent buffer\'s directory.' });
 defvar('agent-transcript-save-delay', 2000, { doc: 'Milliseconds of quiet before a transcript is saved (it is also saved at the end of each turn).' });
-defvar('agent-thought-level', 'full', { doc: 'Thought verbosity: "none" (hide all thoughts), "summary" (show brief thoughts), or "full" (show all thoughts).' });
-defvar('agent-models', {
-  'claude-opus-4': { label: 'Claude Opus 4', description: 'Most capable, best for complex tasks' },
-  'claude-sonnet-4': { label: 'Claude Sonnet 4', description: 'Balanced performance and cost' },
-  'claude-haiku-4': { label: 'Claude Haiku 4', description: 'Fast and efficient' },
-}, { doc: 'Available models for agents. Keys are model IDs, values are { label, description }.' });
-defvar('agent-default-model', 'claude-sonnet-4', { doc: 'Default model to use for new agent sessions.' });
+defvar('agent-thought-level', 'full', { doc: 'How much of the agent\'s thinking text to display (a display filter only; the agent\'s real effort is set with select-effort): "none" (hide all thoughts), "summary" (show brief thoughts), or "full" (show all thoughts).' });
+defvar('agent-models', {}, { doc: 'Extra model labels, merged over what the agent reports: { id: { label, description } }. Normally empty; the session\'s own model list is used.' });
+defvar('agent-default-model', null, { doc: 'Model ID to switch new agent sessions to (nil keeps the agent\'s own default).' });
+defvar('agent-wrap-column', 'auto', { doc: 'Hard-wrap agent text at this column so wrapped lines are real lines: "auto" (window width), a number, or 0 to disable.' });
 defvar('agent-steer-presets', {
   concise: { label: 'Concise', prompt: 'Be extremely concise in your responses. Provide only essential information.' },
   verbose: { label: 'Verbose', prompt: 'Be detailed and thorough in your explanations. Include examples and context.' },
@@ -53,7 +52,8 @@ defvar('agent-steer-presets', {
   debugging: { label: 'Debugging', prompt: 'Focus on debugging and problem-solving. Analyze issues methodically.' },
   code: { label: 'Code-focused', prompt: 'Focus on writing clean, well-documented code. Prioritize code quality.' },
 }, { doc: 'Preset steering prompts. Keys are preset IDs, values are { label, prompt }.' });
-defvar('agent-show-banner', true, { doc: 'Show session banner with model, thought level, and cost information.' });
+defvar('agent-thoughts-collapsed', false, { doc: 'Show thinking sections collapsed to one line by default (TAB on one toggles it; S-TAB toggles all).' });
+defvar('agent-show-banner', true, { doc: 'Show session banner with model, effort, and cost information.' });
 defvar('agent-token-costs', {
   'claude-opus-4': { input: 15, output: 75 },
   'claude-sonnet-4': { input: 3, output: 15 },
@@ -62,6 +62,17 @@ defvar('agent-token-costs', {
 
 const userError = (msg) => new PolymerError('user-error', msg);
 const PROMPT = '❯ ';
+
+/** Lines of text with leading/trailing blank lines dropped and runs of blank lines collapsed to one. */
+function tidyLines(text) {
+  const out = [];
+  for (const l of text.split('\n')) {
+    if (!l.trim()) { if (out.length && out.at(-1) !== '') out.push(''); } else out.push(l.replace(/\s+$/, ''));
+  }
+  while (out.at(-1) === '') out.pop();
+  return out;
+}
+const FENCE = /^\s*```([\w+#.-]+)?\s*$/;
 
 export function defineAgent(name, def) {
   setq('agent-definitions', { ...getVarOr('agent-definitions', {}, null), [name]: def }, null);
@@ -116,37 +127,70 @@ function diffLines(oldText, newText) {
   return [...a.slice(s, a.length - e).map((l) => `-${l}`), ...b.slice(s, b.length - e).map((l) => `+${l}`)];
 }
 
+/** Models for this session: what the agent reported, overlaid with agent-models. { id: { label, description } } */
+function modelsFor(b) {
+  const out = {};
+  for (const m of b.agent.models ?? []) out[m.modelId] = { label: m.name, description: m.description };
+  for (const [id, info] of Object.entries(getVarOr('agent-models', {}, b))) out[id] = { ...out[id], ...info };
+  return out;
+}
+
+/** Columns available in the window showing b (null if unknown / disabled). */
+function wrapWidth(b) {
+  const setting = getVarOr('agent-wrap-column', 'auto', b);
+  if (setting === 0 || setting === false) return null;
+  if (typeof setting === 'number') return setting;
+  const win = windowList().find((w) => w.buffer === b && w.bodyEl?.clientWidth) ?? windowList().find((w) => w.buffer === b);
+  const px = win?.bodyEl?.clientWidth;
+  const { cw } = viewMetrics();
+  return px && cw ? Math.max(20, Math.floor(px / cw) - 2) : 100;
+}
+
+/** Split text into display segments: [{ text, start, end, indent }] (indent = prefix added to continuations). */
+function wrapSegments(text, width) {
+  if (!width || text.length <= width) return [{ text, start: 0, end: text.length, indent: 0 }];
+  const lead = /^(?:\s*(?:│ )?(?:[-*•]\s+|\d+[.)]\s+)?)/.exec(text)[0];
+  const pad = ' '.repeat(Math.min(lead.length, Math.floor(width / 2)));
+  const segs = [];
+  let pos = 0;
+  while (pos < text.length) {
+    const first = segs.length === 0;
+    const room = width - (first ? 0 : pad.length);
+    if (text.length - pos <= room) { segs.push({ text: (first ? '' : pad) + text.slice(pos), start: pos, end: text.length, indent: first ? 0 : pad.length }); break; }
+    let cut = text.lastIndexOf(' ', pos + room);
+    if (cut <= pos + (first ? lead.length : 0)) cut = pos + room; // no good break: hard cut
+    segs.push({ text: (first ? '' : pad) + text.slice(pos, cut), start: pos, end: cut, indent: first ? 0 : pad.length });
+    pos = cut;
+    while (text[pos] === ' ') pos++;
+  }
+  return segs;
+}
+
 function render(b) {
   const a = b.agent;
+  const wrapAt = wrapWidth(b);
   const lines = [];
   const meta = []; // per line: { decos, lineFace, item }
-  const push = (text, extra = {}) => { lines.push(text); meta.push(extra); };
+  const push = (text, extra = {}) => {
+    for (const seg of wrapSegments(text, wrapAt)) {
+      const decos = extra.decos?.flatMap((d) => {
+        const from = Math.max(d.from, seg.start), to = Math.min(d.to, seg.end);
+        return to > from || (d.from === d.to && d.from >= seg.start && d.from <= seg.end)
+          ? [{ ...d, from: from - seg.start + seg.indent, to: to - seg.start + seg.indent }] : [];
+      });
+      lines.push(seg.text);
+      meta.push(decos ? { ...extra, decos } : extra);
+    }
+  };
   const maxOut = getVarOr('agent-tool-output-lines', 12, b);
   const indentAll = (text, prefix, face, item) => {
-    for (const l of text.split('\n')) push(`${prefix}${l}`, { lineFace: face, item });
+    for (const l of tidyLines(text)) push(l ? `${prefix}${l}` : prefix.trimEnd(), { lineFace: face, item });
   };
   
-  // Helper to detect language from fence and apply basic syntax highlighting
-  const highlightCode = (code, lang) => {
-    const keywords = {
-      javascript: /\b(const|let|var|function|async|await|return|if|else|for|while|class|import|export|from|default)\b/g,
-      typescript: /\b(const|let|var|function|async|await|return|if|else|for|while|class|import|export|from|default|interface|type|extends|implements)\b/g,
-      python: /\b(def|class|import|from|return|if|elif|else|for|while|async|await|yield|with|as|try|except|finally)\b/g,
-      rust: /\b(fn|let|mut|const|struct|enum|impl|trait|pub|use|mod|match|if|else|for|while|loop)\b/g,
-      go: /\b(func|var|const|type|struct|interface|import|package|return|if|else|for|range|defer|go)\b/g,
-      java: /\b(public|private|protected|class|interface|extends|implements|return|if|else|for|while|new|this|static|final)\b/g,
-    };
-    
-    const strings = /(["'`])(?:(?=(\\?))\2.)*?\1/g;
-    const comments = /(\/\/.*$|\/\*[\s\S]*?\*\/|#.*$)/gm;
-    
-    return { keywords: keywords[lang?.toLowerCase()], strings, comments };
-  };
-
   const title = `${a.label}  ·  ${abbreviateFileName(a.cwd)}`;
   push(title, { decos: [{ from: 0, to: a.label.length, face: 'agent-title' }, { from: a.label.length, to: title.length, face: 'agent-dim' }] });
   const mode = a.modes?.availableModes?.find((m) => m.id === a.currentMode);
-  const models = getVarOr('agent-models', {}, b);
+  const models = modelsFor(b);
   const modelInfo = a.currentModel && models[a.currentModel];
   const sub = [
     mode && `mode: ${mode.name}`,
@@ -159,7 +203,7 @@ function render(b) {
   // Build header line content (shown at top of window, not in buffer)
   let headerLine = null;
   if (getVarOr('agent-show-banner', true, b) && a.sessionId) {
-    const thoughtLevel = getVarOr('agent-thought-level', 'full', b);
+    const effort = a.effortOption && flatChoices(a.effortOption).find((o) => o.value === a.effortOption.currentValue);
     const tokenCosts = getVarOr('agent-token-costs', {}, b);
     const costs = a.currentModel && tokenCosts[a.currentModel];
     
@@ -170,7 +214,7 @@ function render(b) {
     
     const bannerParts = [
       `Model: ${modelInfo?.label || a.currentModel || 'unknown'}`,
-      `Thought: ${thoughtLevel}`,
+      effort && `Effort: ${effort.name ?? effort.value}`,
       `Tokens: ${totalTokens.toLocaleString()} (in: ${a.tokens.input.toLocaleString()}, out: ${a.tokens.output.toLocaleString()})`,
       costs && `Cost: $${totalCost.toFixed(4)}`,
     ].filter(Boolean);
@@ -180,6 +224,9 @@ function render(b) {
 
   let prevType = null;
   for (const item of a.items) {
+    // Items that render nothing must not leave a blank line behind.
+    if ((item.type === 'thought' && (getVarOr('agent-thought-level', 'full', b) === 'none' || !item.text.trim()))
+      || (item.type === 'assistant' && !item.text.trim())) continue;
     const grouped = (item.type === 'assistant' || item.type === 'thought') && prevType === 'tool';
     if (!(item.type === 'tool' && prevType === 'tool') || grouped) push('');
     prevType = item.type;
@@ -188,60 +235,73 @@ function render(b) {
       push(`${PROMPT}${first}`, { decos: [{ from: 0, to: PROMPT.length + first.length, face: 'agent-user' }], item });
       for (const l of rest) push(`  ${l}`, { decos: [{ from: 0, to: l.length + 2, face: 'agent-user' }], item });
     } else if (item.type === 'assistant') {
-      let inCode = false;
-      let codeLang = null;
-      for (const l of item.text.replace(/\n+$/, '').split('\n')) {
-        const fenceMatch = /^\s*```(\w+)?/.exec(l);
-        const fence = !!fenceMatch;
+      const textLines = [];
+      { // Collapse blank runs (outside code blocks) and trim the ends.
+        let fenced = false;
+        for (const l of item.text.split('\n')) {
+          if (FENCE.test(l)) fenced = !fenced;
+          if (!fenced && !l.trim()) { if (textLines.length && textLines.at(-1) !== '') textLines.push(''); } else textLines.push(fenced ? l : l.replace(/\s+$/, ''));
+        }
+        while (textLines.at(-1) === '') textLines.pop();
+      }
+      // Pass 1: find fenced blocks and highlight each one as a whole (tree-sitter needs full context).
+      const blocks = new Map(); // fence-open line -> { lang, hl, first }
+      for (let i = 0; i < textLines.length; i++) {
+        const open = FENCE.exec(textLines[i]);
+        if (!open) continue;
+        let j = i + 1;
+        while (j < textLines.length && !FENCE.test(textLines[j])) j++;
+        const code = textLines.slice(i + 1, j).join('\n');
+        const hl = open[1] ? highlightSnippet(open[1], code, () => scheduleRedraw(b)) : null;
+        blocks.set(i, { hl, end: j });
+        i = j;
+      }
+      // Pass 2: emit lines.
+      let block = null;
+      for (let i = 0; i < textLines.length; i++) {
+        const l = textLines[i];
         const decos = [];
-        
-        if (fence) {
-          if (!inCode && fenceMatch[1]) codeLang = fenceMatch[1];
-          decos.push({ from: 0, to: l.length, face: 'agent-code' });
-          inCode = !inCode;
-          if (!inCode) codeLang = null;
-        } else if (inCode) {
-          // Apply syntax highlighting to code lines
-          decos.push({ from: 0, to: l.length, face: 'agent-code' });
-          const { keywords, strings, comments } = highlightCode(l, codeLang);
-          
-          // Highlight keywords
-          if (keywords) {
-            for (const m of l.matchAll(keywords)) {
-              decos.push({ from: m.index, to: m.index + m[0].length, face: 'keyword' });
-            }
-          }
-          
-          // Highlight strings
-          for (const m of l.matchAll(strings)) {
-            decos.push({ from: m.index, to: m.index + m[0].length, face: 'string' });
-          }
-          
-          // Highlight comments
-          for (const m of l.matchAll(comments)) {
-            decos.push({ from: m.index, to: m.index + m[0].length, face: 'comment' });
-          }
+        let extra = {};
+        if (blocks.has(i) && !block) {
+          block = { ...blocks.get(i), start: i };
+          decos.push({ from: 0, to: l.length, face: 'agent-dim' });
+          extra = { lineFace: 'agent-codeline' };
+        } else if (block && i === block.end) {
+          decos.push({ from: 0, to: l.length, face: 'agent-dim' });
+          extra = { lineFace: 'agent-codeline' };
+          block = null;
+        } else if (block) {
+          const row = i - block.start - 1;
+          if (block.hl) decos.push(...(block.hl.get(row) ?? []));
+          extra = { lineFace: 'agent-codeline' };
         } else if (/^#{1,6}\s/.test(l)) {
           decos.push({ from: 0, to: l.length, face: 'agent-heading' });
         } else {
           for (const m of l.matchAll(/`[^`]+`/g)) decos.push({ from: m.index, to: m.index + m[0].length, face: 'agent-code' });
           for (const m of l.matchAll(/\*\*[^*]+\*\*/g)) decos.push({ from: m.index, to: m.index + m[0].length, face: 'agent-bold' });
         }
-        push(l, { decos, item });
+        push(l, { decos, item, ...extra });
       }
     } else if (item.type === 'thought') {
       const thoughtLevel = getVarOr('agent-thought-level', 'full', b);
       if (thoughtLevel !== 'none') {
-        let text = item.text.replace(/\n+$/, '');
-        if (thoughtLevel === 'summary') {
-          // For summary mode, show only first 2 lines or first 100 chars
-          const lines = text.split('\n');
-          if (lines.length > 2 || text.length > 100) {
-            text = lines.slice(0, 2).join('\n').slice(0, 100);
-            if (item.text.length > text.length) text += '…';
+        const all = tidyLines(item.text);
+        const collapsed = item.collapsed ?? getVarOr('agent-thoughts-collapsed', false, b);
+        const count = all.length === 1 ? '' : ` (${all.length} lines)`;
+        const preview = collapsed ? `  ${all.find((l) => l)?.slice(0, 70) ?? ''}${all[0].length > 70 ? '…' : ''}` : '';
+        const head = `${collapsed ? '▸' : '▾'} Thinking${count}`;
+        push(`${head}${preview}`, { lineFace: 'agent-thought', item, decos: [{ from: 0, to: 1, face: 'agent-fold' }, { from: head.length, to: head.length + preview.length, face: 'agent-dim' }] });
+        if (!collapsed) {
+          let text = all.join('\n');
+          if (thoughtLevel === 'summary') {
+            // For summary mode, show only first 2 lines or first 100 chars
+            if (all.length > 2 || text.length > 100) {
+              text = all.slice(0, 2).join('\n').slice(0, 100);
+              if (item.text.length > text.length) text += '…';
+            }
           }
+          indentAll(text, '│ ', 'agent-thought', item);
         }
-        indentAll(text, '│ ', 'agent-thought', item);
       }
     } else if (item.type === 'tool') {
       const icon = STATUS_ICON[item.status] ?? '•';
@@ -277,10 +337,15 @@ function render(b) {
     }
   }
   push('');
+  const status = a.busy || a.promptQueue.length > 0;
   if (a.busy) push(`· ${a.label} is working…  (C-c C-k to cancel)`, { lineFace: 'agent-info' });
   if (a.promptQueue.length > 0) {
     push(`· Queue: ${a.promptQueue.length} prompt${a.promptQueue.length === 1 ? '' : 's'} waiting  (C-c q to view/clear)`, { lineFace: 'agent-info' });
   }
+  // A rule (with padding) between the conversation and the input area.
+  if (status) push('');
+  push('─'.repeat(Math.max(10, Math.min(wrapAt ?? 80, 200))), { lineFace: 'agent-separator' });
+  push('');
   // The prompt line: "❯ " starts the editable input.
   const transcript = `${lines.join('\n')}\n${PROMPT}`;
   meta.push({ decos: [{ from: 0, to: PROMPT.length - 1, face: 'agent-prompt' }] });
@@ -324,6 +389,11 @@ function redraw(b) {
   
   b.touch();
 }
+
+// Re-wrap when the window changes size.
+const redrawAllAgents = () => { for (const x of bufferList({ all: true })) if (x.agent && !x.agent.dead) scheduleRedraw(x); };
+addHook('window-configuration-change-hook', redrawAllAgents);
+if (typeof window !== 'undefined') window.addEventListener('resize', redrawAllAgents);
 
 function scheduleRedraw(b) {
   if (b.agent.redrawPending) return;
@@ -437,7 +507,7 @@ export async function openAgent({ name = getVarOr('agent-default', 'claude-code'
   b.readOnlyBefore = new Marker(b, 0);
   b.agent = { 
     name, label, cwd, def, items: [], meta: [], busy: false, status: 'starting…', 
-    modes: null, currentMode: null, currentModel: getVarOr('agent-default-model', null, null), 
+    modes: null, currentMode: null, currentModel: null, models: null, 
     commands: [], client: null, sessionId: null, promptQueue: [], processingQueue: false,
     steerPrompts: [], // Active steering prompts
     tokens: { input: 0, output: 0 } // Token usage tracking
@@ -519,6 +589,18 @@ async function newSession(b) {
     a.sessionId = res.sessionId;
     a.modes = res.modes ?? null;
     a.currentMode = res.modes?.currentModeId ?? null;
+    // Newer agents report models as a "model" config option; older ones as `models`.
+    if (findOption(res.configOptions, 'model', 'model')) {
+      applyConfigOptions(a, res.configOptions);
+    } else {
+      a.models = res.models?.availableModels ?? null;
+      a.currentModel = res.models?.currentModelId ?? null;
+      a.modelConfigId = null;
+    }
+    const want = getVarOr('agent-default-model', null, b);
+    if (want && want !== a.currentModel && a.models?.some((m) => m.modelId === want)) {
+      await setAgentModel(a, want).then(() => { a.currentModel = want; }).catch(() => {});
+    }
     a.status = null;
     runHooks('agent-session-started-hook', b);
   } catch (e) {
@@ -531,6 +613,29 @@ async function newSession(b) {
     }
   }
   scheduleRedraw(b);
+}
+
+const flatChoices = (opt) => (opt?.options ?? []).flatMap((o) => o.options ?? [o]);
+const findOption = (opts, id, category) => opts?.find((o) => o.id === id || (category && o.category === category));
+
+/** Take the agent's current configOptions (model, effort, ...) as the truth. */
+function applyConfigOptions(a, opts) {
+  if (!opts) return;
+  a.configOptions = opts;
+  const model = findOption(opts, 'model', 'model');
+  if (model) {
+    a.models = flatChoices(model).map((o) => ({ modelId: o.value, name: o.name, description: o.description }));
+    a.currentModel = model.currentValue ?? null;
+    a.modelConfigId = model.id;
+  }
+  const effort = findOption(opts, 'effort', 'thought_level');
+  a.effortOption = effort ?? null;
+}
+
+async function setAgentModel(a, modelId) {
+  if (!a.modelConfigId) return a.client.setModel(a.sessionId, modelId);
+  const res = await a.client.setConfigOption(a.sessionId, a.modelConfigId, modelId);
+  applyConfigOptions(a, res?.configOptions); // a model switch can change the effort choices
 }
 
 function requireAgent() {
@@ -823,6 +928,7 @@ defcommand('agent-return', { doc: 'RET: send when in the input; on a tool line, 
   const b = requireAgent();
   if (b.point.pos >= b.readOnlyBefore.pos) return agentSend(b);
   const item = b.agent.meta[b.lineAt()]?.item;
+  if (item?.type === 'thought') return call('agent-toggle-thought');
   const loc = item?.locations?.[0];
   if (loc?.path) {
     const { openFile } = await import('../commands/files.js');
@@ -831,6 +937,57 @@ defcommand('agent-return', { doc: 'RET: send when in the input; on a tool line, 
     return;
   }
   b.point.set(b.length);
+});
+
+function thoughtAtPoint(b) {
+  const item = b.agent.meta[b.lineAt()]?.item;
+  return item?.type === 'thought' ? item : null;
+}
+
+/** Redraw and put point on the item's first line (its body may have just disappeared). */
+function redrawAt(b, item) {
+  redraw(b);
+  const line = b.agent.meta.findIndex((m) => m?.item === item);
+  if (line >= 0) b.point.set(b.offsetAt(line, 0));
+}
+
+defcommand('agent-toggle-thought', { doc: 'Expand or collapse the thinking section at point (TAB).' }, () => {
+  const b = requireAgent();
+  const item = thoughtAtPoint(b);
+  if (!item) { message('No thinking section here (move onto one, or S-TAB for all)'); return; }
+  toggleThought(b, item);
+});
+
+function toggleThought(b, item) {
+  item.collapsed = !(item.collapsed ?? getVarOr('agent-thoughts-collapsed', false, b));
+  redrawAt(b, item);
+}
+
+defcommand('agent-tab', { doc: 'TAB: toggle the thinking section at point when point is in the transcript; indent in the input.' }, () => {
+  const b = requireAgent();
+  if (b.point.pos < b.readOnlyBefore.pos) return call('agent-toggle-thought');
+  return call('indent-for-tab-command');
+});
+
+// Clicking the ▾/▸ marker of a thinking section toggles it.
+addHook('mouse-set-point-hook', function agentClickFold(win, off) {
+  const b = win.buffer;
+  if (!b?.agent || off >= b.readOnlyBefore.pos) return;
+  const { line, col } = b.posAt(off);
+  const m = b.agent.meta[line];
+  if (col > 1 || m?.item?.type !== 'thought' || b.agent.meta.findIndex((x) => x?.item === m.item) !== line) return;
+  toggleThought(b, m.item);
+});
+
+defcommand('agent-toggle-all-thoughts', { doc: 'Collapse all thinking sections, or expand them all if they are all collapsed (S-TAB).' }, () => {
+  const b = requireAgent();
+  const thoughts = b.agent.items.filter((i) => i.type === 'thought');
+  if (!thoughts.length) return;
+  const dflt = getVarOr('agent-thoughts-collapsed', false, b);
+  const collapse = thoughts.some((t) => !(t.collapsed ?? dflt));
+  for (const t of thoughts) t.collapsed = collapse;
+  redrawAt(b, thoughtAtPoint(b) ?? thoughts.at(-1));
+  message(collapse ? 'Thinking collapsed' : 'Thinking expanded');
 });
 
 defcommand('agent-newline', { doc: 'Insert a newline in the input (S-RET, C-j).' }, () => {
@@ -856,25 +1013,30 @@ defcommand('agent-set-mode', { doc: 'Change the session mode, e.g. plan or accep
   scheduleRedraw(b);
 });
 
-defcommand('select-thought-level', { doc: 'Set thought/reasoning verbosity level for the agent.' }, async () => {
+defcommand('select-effort', { doc: 'Set the agent\'s effort level (how hard it thinks), as Claude Code\'s /model does.' }, async () => {
   const b = requireAgent();
-  const current = getVarOr('agent-thought-level', 'full', b);
-  const levels = [
-    { label: 'Full', value: 'full', annotation: current === 'full' ? 'current  Show all thoughts and reasoning' : 'Show all thoughts and reasoning' },
-    { label: 'Summary', value: 'summary', annotation: current === 'summary' ? 'current  Show brief thought summaries' : 'Show brief thought summaries' },
-    { label: 'None', value: 'none', annotation: current === 'none' ? 'current  Hide all thoughts' : 'Hide all thoughts' },
-  ];
-  const level = await completingRead('Thought level: ', levels);
-  setq('agent-thought-level', level, b);
+  const a = b.agent;
+  if (!a.sessionId) throw userError('No active session');
+  const opt = a.effortOption;
+  if (!opt) throw userError('This agent/model has no effort setting');
+  const choices = flatChoices(opt).map((o) => ({
+    label: o.name ?? o.value,
+    value: o.value,
+    annotation: `${o.value === opt.currentValue ? 'current  ' : ''}${o.description ?? ''}`,
+  }));
+  const value = await completingRead('Effort: ', choices);
+  const res = await a.client.setConfigOption(a.sessionId, opt.id, value);
+  if (res?.configOptions) applyConfigOptions(a, res.configOptions);
+  else opt.currentValue = value;
   scheduleRedraw(b);
-  message('Thought level set to: %s', level);
+  message('Effort set to: %s', choices.find((c) => c.value === value)?.label ?? value);
 });
 
 defcommand('select-model', { doc: 'Change the AI model used by the agent.' }, async () => {
   const b = requireAgent();
   if (!b.agent.sessionId) throw userError('No active session');
-  const models = getVarOr('agent-models', {}, b);
-  if (Object.keys(models).length === 0) throw userError('No models configured (see agent-models)');
+  const models = modelsFor(b);
+  if (Object.keys(models).length === 0) throw userError('The agent reported no models');
   
   const current = b.agent.currentModel;
   const choices = Object.entries(models).map(([id, info]) => ({
@@ -886,7 +1048,7 @@ defcommand('select-model', { doc: 'Change the AI model used by the agent.' }, as
   const modelId = await completingRead('Model: ', choices);
   
   try {
-    await b.agent.client.setModel(b.agent.sessionId, modelId);
+    await setAgentModel(b.agent, modelId);
     b.agent.currentModel = modelId;
     scheduleRedraw(b);
     message('Model changed to: %s', models[modelId]?.label || modelId);
@@ -1101,14 +1263,21 @@ export async function killOrphanAgents() {
 // Keys
 
 defineKey({ keymaps: 'agent-mode-map', states: 'insert' }, {
+  'TAB': 'agent-tab',
   'RET': 'agent-newline',
   'C-j': 'agent-newline',
 });
 defineKey({ keymaps: 'agent-mode-map', states: 'normal' }, {
   'RET': 'agent-return',
+  'TAB': 'agent-toggle-thought',
+  'S-TAB': 'agent-toggle-all-thoughts',
+  'z a': 'agent-toggle-thought',
+  'z A': 'agent-toggle-all-thoughts',
   'o': 'agent-vim-append-line',
 });
 defineKey({ keymaps: 'agent-mode-map', states: ['normal', 'insert'] }, {
+  'C-c t': 'agent-toggle-thought',
+  'C-c T': 'agent-toggle-all-thoughts',
   'C-c': { label: 'agent' },
   'C-c C-c': 'agent-send',
   'C-c C-k': 'agent-cancel',
@@ -1120,7 +1289,7 @@ defineKey({ keymaps: 'agent-mode-map', states: ['normal', 'insert'] }, {
   'C-c Q': 'agent-queue-prompt',
   'C-c s': 'agent-add-steer',
   'C-c S': 'agent-remove-steer',
-  'C-c v': 'select-thought-level',
+  'C-c v': 'select-effort',
 });
 defineKey({ keymaps: 'global', states: ['normal', 'visual'], prefix: 'SPC' }, {
   'a': { label: 'agent' },
@@ -1134,7 +1303,7 @@ defineKey({ keymaps: 'global', states: ['normal', 'visual'], prefix: 'SPC' }, {
   'a r': 'agent-restart',
   'a t': 'agent-open-transcript',
   'a T': 'agent-browse-transcripts',
-  'a v': 'select-thought-level',
+  'a v': 'select-effort',
   'a q': 'agent-view-queue',
   'a Q': 'agent-queue-prompt',
   'a S': 'agent-add-steer',

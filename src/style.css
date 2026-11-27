@@ -456,6 +456,9 @@ body.helm-active #echo { display: none; }
 .agent-status-failed { color: var(--error); }
 .agent-done { color: var(--fg-dim); text-decoration: line-through; }
 .agent-code { color: var(--syn-string); }
+.line.agent-codeline { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.line.agent-separator { color: var(--fg-dim); opacity: 0.6; }
+.agent-fold { color: var(--accent); font-style: normal; }
 .agent-heading { color: var(--accent-2); font-weight: bold; }
 .agent-bold { font-weight: bold; }
 .line.agent-thought { color: var(--fg-dim); font-style: italic; }

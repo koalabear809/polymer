@@ -271,14 +271,19 @@ function computeChunk(state, b, tree, start) {
     byRange.delete(key); // re-insert so ordering reflects the winner
     byRange.set(key, { len: n.endIndex - n.startIndex, sp: n.startPosition, ep: n.endPosition, face: captureFace(c.name) });
   }
-  const items = [...byRange.values()];
+  const rows = paintCaptures([...byRange.values()], start, end, (row) => b.lineText(row).length);
+  for (let row = start; row < end; row++) state.cache.set(row, rows.get(row) ?? []);
+}
+
+/** Captures [{ len, sp, ep, face }] -> Map(row -> [{ from, to, face, priority }]) for rows [start, end). */
+function paintCaptures(items, start, end, lineLength) {
   items.sort((x, y) => y.len - x.len); // outer first; inner ranges paint over them
   const paint = new Map(); // line -> array of faces per column
   for (const it of items) {
     const r0 = Math.max(start, it.sp.row);
     const r1 = Math.min(end - 1, it.ep.row);
     for (let row = r0; row <= r1; row++) {
-      const len = Math.min(b.lineText(row).length, MAX_COLS);
+      const len = Math.min(lineLength(row), MAX_COLS);
       const from = row === it.sp.row ? it.sp.column : 0;
       const to = Math.min(row === it.ep.row ? it.ep.column : len, len);
       if (to <= from) continue;
@@ -287,21 +292,73 @@ function computeChunk(state, b, tree, start) {
       for (let i = from; i < to; i++) arr[i] = it.face;
     }
   }
-  for (let row = start; row < end; row++) {
-    const arr = paint.get(row);
+  const rows = new Map();
+  for (const [row, arr] of paint) {
     const out = [];
-    if (arr) {
-      let i = 0;
-      while (i < arr.length) {
-        const f = arr[i];
-        let j = i + 1;
-        while (j < arr.length && arr[j] === f) j++;
-        if (f) out.push({ from: i, to: j, face: f, priority: 1 });
-        i = j;
-      }
+    let i = 0;
+    while (i < arr.length) {
+      const f = arr[i];
+      let j = i + 1;
+      while (j < arr.length && arr[j] === f) j++;
+      if (f) out.push({ from: i, to: j, face: f, priority: 1 });
+      i = j;
     }
-    state.cache.set(row, out);
+    rows.set(row, out);
   }
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Snippets (code that isn't in a buffer, e.g. fenced blocks in agent replies)
+
+const LANGUAGE_ALIASES = {
+  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript', node: 'javascript',
+  ts: 'typescript', py: 'python', python3: 'python', rs: 'rust', golang: 'go',
+  sh: 'bash', shell: 'bash', zsh: 'bash', console: 'bash', 'c++': 'cpp', cc: 'cpp', h: 'c',
+  yml: 'yaml', jsonc: 'json',
+};
+const snippetCache = new Map(); // `${lang}\0${code}` -> Map(row -> decos)
+
+/**
+ * Highlight a piece of code in a named language: Map(row -> [{ from, to, face, priority }]),
+ * or null if the language is unknown or still loading (onReady is called once it has loaded,
+ * so the caller can try again).
+ */
+export function highlightSnippet(langName, code, onReady) {
+  const name = LANGUAGE_ALIASES[langName?.toLowerCase()] ?? langName?.toLowerCase();
+  const def = name && languages.get(name);
+  if (!def || !code) return null;
+  const key = `${name}\0${code}`;
+  if (snippetCache.has(key)) return snippetCache.get(key);
+  if (!def.snippet) {
+    def.snippet = 'loading';
+    loadTreesitLanguage(name).then(({ language, query }) => {
+      const parser = new Parser();
+      parser.setLanguage(language);
+      def.snippet = { parser, query };
+      onReady?.();
+    }).catch(() => { def.snippet = { failed: true }; });
+    return null;
+  }
+  if (def.snippet === 'loading') return null;
+  const { parser, query, failed } = def.snippet;
+  if (failed || !query) return null;
+  const tree = parser.parse(code);
+  if (!tree) return null;
+  const byRange = new Map();
+  for (const c of query.captures(tree.rootNode)) {
+    if (IGNORED_CAPTURES.test(c.name)) continue;
+    const n = c.node;
+    const k = `${n.startIndex}:${n.endIndex}`;
+    byRange.delete(k);
+    byRange.set(k, { len: n.endIndex - n.startIndex, sp: n.startPosition, ep: n.endPosition, face: captureFace(c.name) });
+  }
+  const lines = code.split('\n');
+  const rows = paintCaptures([...byRange.values()], 0, lines.length, (row) => lines[row]?.length ?? 0);
+  tree.delete();
+  if (snippetCache.size > 300) snippetCache.clear();
+  snippetCache.set(key, rows);
+  return rows;
 }
 
 // ---------------------------------------------------------------------------

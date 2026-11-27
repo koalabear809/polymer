@@ -100,6 +100,10 @@ export class AcpClient {
     return this.conn.request('session/set_mode', { sessionId, modeId });
   }
 
+  setConfigOption(sessionId, configId, value) {
+    return this.conn.request('session/set_config_option', { sessionId, configId, value });
+  }
+
   setModel(sessionId, modelId) {
     return this.conn.request('session/set_model', { sessionId, modelId });
   }
