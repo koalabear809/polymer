@@ -21,8 +21,11 @@ read -r answer
 
 sed -i.bak "0,/^version = \".*\"/s//version = \"$v\"/" src-tauri/Cargo.toml && rm -f src-tauri/Cargo.toml.bak
 (cd src-tauri && cargo update -p polymer --offline >/dev/null 2>&1 || cargo check -q)
-git add src-tauri/Cargo.toml src-tauri/Cargo.lock
-git commit -q -m "Release v$v"
+# Nothing to commit when releasing the version already in Cargo.toml.
+if ! git diff --quiet -- src-tauri/Cargo.toml src-tauri/Cargo.lock; then
+  git add src-tauri/Cargo.toml src-tauri/Cargo.lock
+  git commit -q -m "Release v$v"
+fi
 git tag "v$v"
 git push origin main "v$v"
 echo "Pushed. Watch the build: gh run watch   (then publish the draft release on GitHub)"
