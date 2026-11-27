@@ -180,12 +180,39 @@ Add tools with `defineMcpTool(name, { description, inputSchema, handler })`.
 
 `SPC t t` (`load-theme`) picks a theme, previewing each as you move; the choice is
 remembered. Bundled: Gruvbox Dark (default), Gruvbox Dark Hard, Tokyo Night,
-Catppuccin Mocha, Nord, One Dark. A theme sets the CSS variables in `src/style.css`
-(UI, `--syn-*` syntax colors, `--term-0`..`--term-15`). In `init.js`:
+Catppuccin Mocha, Nord, One Dark, Andromeda. A theme sets the CSS variables in
+`src/style.css` (UI, `--syn-*` syntax colors, `--term-0`..`--term-15`).
+
+Themes are files, one per theme, named after it. The first time Polymer runs, it copies
+the bundled ones into `~/.polymer/themes/` (`custom-theme-directory`). Edit them or add
+your own there, then run `M-x reload-themes`. A file there replaces the bundled theme
+with the same name.
 
 ```js
-setq('theme', 'nord')                       // overrides the remembered choice
-defineTheme('my-theme', { base: 'gruvbox-dark', colors: { '--bg': '#1c1c1c' } })
+// ~/.polymer/themes/my-theme.js
+module.exports = {
+  label: 'My Theme',
+  base: 'gruvbox-dark',                // optional: start from another theme
+  ui: { bg: '#1c1c1c', accent: '#7aa2f7' },
+  syn: { keyword: '#ff79c6', variable: '#e0e0e0' },
+  term: { 0: '#1c1c1c' },              // all 16 colors as an array, or some indexes
+  colors: { '--region': '#333' },      // any CSS variable directly
+};
+```
+
+`SPC h v custom-theme-directory` lists every key. Commands: `find-theme-file` opens a theme's file,
+copying a bundled one there first. `install-default-themes` copies back bundled themes
+that are missing.
+
+The API: `defineTheme(name, spec)`, `loadTheme(name)`, `getTheme(name)`, `themeList()`,
+`currentTheme()`, `themeColor('--bg')`, `loadThemeFile(path)`, `loadThemes()`,
+`themeDirectory()`, `installDefaultThemes()`, and `after-load-theme-hook`, which is called
+with the theme's name. In `init.js`:
+
+```js
+setq('theme', 'andromeda')                  // overrides the remembered choice
+defineTheme('my-dark', { base: 'nord', ui: { bg: '#1c1c1c' } })
+addHook('after-load-theme-hook', (name) => message('Theme: %s', name))
 ```
 
 ## Windows
@@ -204,7 +231,7 @@ src/                  frontend (plain JS, no bundler)
   vim/                vim layer (motions, operators, text objects, ex, search)
   syntax/             tree-sitter integration
   terminal/           terminal buffers (frontend)
-  themes/             color themes
+  themes/             theme API; builtin/ holds the bundled theme files
   persp/              perspectives
   git/                git interface
   agent/              ACP client and agent buffers

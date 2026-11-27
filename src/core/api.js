@@ -145,7 +145,16 @@ export const api = {
 
   // themes
   defineTheme: themes.defineTheme,
-  loadTheme: (name) => registry.setq('theme', name, null),
+  loadTheme: themes.loadTheme,
+  getTheme: themes.getTheme,
+  themeList: themes.themeList,
+  currentTheme: themes.currentTheme,
+  themeColor: themes.themeColor,
+  themeColorsFrom: themes.themeColorsFrom,
+  loadThemeFile: themes.loadThemeFile,
+  loadThemes: themes.loadThemes,
+  themeDirectory: themes.themeDirectory,
+  installDefaultThemes: themes.installDefaultThemes,
 
   // perspectives
   perspSwitch: persp.perspSwitch,

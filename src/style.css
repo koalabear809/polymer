@@ -1,5 +1,6 @@
 :root {
-  /* Colors come from the active theme (src/themes/themes.js); these are Gruvbox Dark. */
+  /* Colors come from the active theme (src/themes/); these are Gruvbox Dark. Themes may
+     also set --syn-variable (default --fg) and --syn-number (default --syn-constant). */
   --bg: #282828;
   --bg-alt: #1d2021;
   --bg-hl: #3c3836;
@@ -371,14 +372,15 @@ body.helm-active #echo { display: none; }
 .hl-string-special, .hl-string-regex { color: var(--syn-string-special); }
 .hl-string-special-key { color: var(--syn-property); }
 .hl-escape, .hl-string-escape { color: var(--syn-escape); }
-.hl-number, .hl-boolean, .hl-float, .hl-constant, .hl-constant-builtin { color: var(--syn-constant); }
+.hl-boolean, .hl-constant, .hl-constant-builtin { color: var(--syn-constant); }
+.hl-number, .hl-float { color: var(--syn-number, var(--syn-constant)); }
 .hl-function, .hl-method, .hl-function-method, .hl-method-call, .hl-function-call { color: var(--syn-function); }
 .hl-function-builtin { color: var(--syn-builtin); }
 .hl-function-macro { color: var(--syn-macro); }
 .hl-constructor { color: var(--syn-type); }
 .hl-type { color: var(--syn-type); }
 .hl-type-builtin { color: var(--syn-type); font-style: italic; }
-.hl-variable { color: var(--fg); }
+.hl-variable { color: var(--syn-variable, var(--fg)); }
 .hl-variable-builtin { color: var(--syn-builtin); }
 .hl-variable-parameter, .hl-parameter { color: var(--syn-parameter); }
 .hl-property, .hl-field { color: var(--syn-property); }

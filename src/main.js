@@ -27,7 +27,7 @@ import { loadInitFile } from './commands/config.js';
 import './vim/index.js';
 import './syntax/index.js';
 import { reattachTerminals } from './terminal/term.js';
-import { restoreChosenTheme } from './themes/themes.js';
+import { restoreChosenTheme, initThemeDirectory, loadThemes, themesReady } from './themes/themes.js';
 import { initPerspectives } from './persp/persp.js';
 import './git/index.js';
 import './agent/index.js';
@@ -89,13 +89,22 @@ async function boot() {
     try { await fn(); } catch (e) { e.message = `${name}: ${e.message}`; reportError(e); }
   };
   await step('files', () => initFiles());
+  let config = null; // { noInit }, once the config directory is known
+  await step('config', async () => { config = await initLoader(); });
+  // Themes load before init.js so it can pick one with setq('theme', ...). With -q (or
+  // no config directory) only the built-in ones load.
+  await step('themes', async () => {
+    initThemeDirectory();
+    await loadThemes({ user: !!config && !config.noInit });
+  });
   await step('init', async () => {
-    const { noInit } = await initLoader();
-    if (noInit) message('Skipped init.js (POLYMER_NO_INIT / -q)');
+    if (!config) return; // the config step already reported why
+    if (config.noInit) message('Skipped init.js (POLYMER_NO_INIT / -q)');
     else await loadInitFile();
   });
   await step('saved state', async () => {
     await restoreState();
+    await themesReady(); // init.js may have started loading another theme directory
     restoreChosenTheme();
     startStateSaving();
   });

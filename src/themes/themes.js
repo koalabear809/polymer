@@ -6,78 +6,357 @@
 //   M-x load-theme      choose a theme (previews as you move; remembered across restarts)
 //   setq('theme', 'nord') in init.js also works.
 //
-// Define your own (from init.js or a package): start from an existing theme and override.
-//   defineTheme('my-theme', { label: 'Mine', base: 'gruvbox-dark', colors: { '--bg': '#202020' } })
+// Themes are files: one per theme, named after it, setting module.exports. The built-in
+// ones live in src/themes/builtin/ and are copied to the theme directory (by default
+// ~/.polymer/themes/) the first time it is created. Files there are loaded after the
+// built-ins, so a copy replaces the built-in theme of the same name. A theme file:
+//
+//   // ~/.polymer/themes/my-theme.js
+//   module.exports = {
+//     label: 'My Theme',
+//     base: 'gruvbox-dark',               // optional: start from another theme
+//     ui: { bg: '#202020', accent: '#7aa2f7' },
+//     syn: { keyword: '#ff79c6' },
+//     term: { 0: '#202020' },             // a full 16-color array, or just some indexes
+//     colors: { '--font-size': '14px' },  // optional: any other CSS variables
+//   };
+//
+// Or define one from init.js or a package:
+//   defineTheme('my-theme', { label: 'Mine', base: 'gruvbox-dark', ui: { bg: '#202020' } })
 
-import { defcommand, defvar, getVarOr, setq, addVariableWatcher } from '../core/registry.js';
+import { defcommand, defvar, getVarOr, setq, addVariableWatcher, runHooks } from '../core/registry.js';
 import { helm } from '../core/helm/helm.js';
 import { message } from '../core/echo.js';
 import { PolymerError } from '../core/errors.js';
 import { invalidateMetrics } from '../core/view.js';
 import { scheduleRedisplay } from '../core/redisplay.js';
+import { evalModule, describeLoadError, configDirectory } from '../core/loader.js';
+import {
+  readTextFile, writeTextFile, pathInfo, listDirectory, makeDirectory, expandFileName, asDirectory,
+  abbreviateFileName,
+} from '../core/files.js';
+import { isTauri } from '../core/host.js';
 
 defvar('theme', 'gruvbox-dark', { doc: 'The active color theme (see M-x load-theme).' });
 defvar('chosen-theme', null, { doc: 'The theme last picked with load-theme; restored at startup unless init.js sets theme.' });
+defvar('custom-theme-directory', null, {
+  doc: [
+    'Directory of theme files; by default <config>/themes/. Each NAME.js there defines the theme NAME',
+    'by setting module.exports (reload with M-x reload-themes):',
+    '  label   the name shown by load-theme',
+    '  base    a theme to start from',
+    '  ui      bg bgAlt bgHl bgSel fg fgDim fgMuted accent accent2 match error green yellow cyan',
+    '          border region regionLine search',
+    '  syn     comment keyword preproc operator string stringSpecial escape constant function builtin',
+    '          macro type parameter property attribute tag label punctuation, and optionally',
+    '          variable (default: fg) and number (default: constant)',
+    '  term    the 16 terminal colors: an array, or { index: color }',
+    '  colors  any CSS variables, e.g. { "--font-size": "14px" }',
+  ].join('\n'),
+});
 
+/** The themes that ship with Polymer (src/themes/builtin/NAME.js). */
+export const BUILTIN_THEMES = ['gruvbox-dark', 'gruvbox-dark-hard', 'tokyo-night', 'catppuccin-mocha', 'nord', 'one-dark', 'andromeda'];
+
+// name -> entry { name, label, base, own, file }. `own` holds the theme's own variables;
+// `base` is a theme name, or the entry a theme replaced when it names itself as its base
+// (a nord.js that tweaks the built-in nord). Colors are resolved through `base` when a
+// theme is applied, so editing a base reaches the themes built on it.
 const themes = new Map();
 
+function resolveColors(entry, seen = new Set()) {
+  if (seen.has(entry)) throw new PolymerError('user-error', `Theme ${entry.name}: its bases form a loop`);
+  seen.add(entry);
+  let inherited = {};
+  if (entry.base) {
+    const base = typeof entry.base === 'string' ? themes.get(entry.base) : entry.base;
+    if (!base) throw new PolymerError('user-error', `Theme ${entry.name}: unknown base theme ${entry.base}`);
+    inherited = resolveColors(base, seen);
+  }
+  return { ...inherited, ...entry.own };
+}
+
+/** True if `entry` is `name` or built on it. */
+function dependsOn(entry, name, seen = new Set()) {
+  if (!entry || seen.has(entry)) return false;
+  seen.add(entry);
+  if (entry.name === name) return true;
+  return dependsOn(typeof entry.base === 'string' ? themes.get(entry.base) : entry.base, name, seen);
+}
+
+/** The public view of an entry: { name, label, base, file, colors }. */
+function view(entry) {
+  return {
+    name: entry.name,
+    label: entry.label,
+    base: typeof entry.base === 'string' ? entry.base : entry.base ? entry.name : null,
+    file: entry.file,
+    get colors() { return resolveColors(entry); },
+  };
+}
+
 /**
- * Build a theme's variables from a palette.
- * ui: bg, bgAlt, bgHl, bgSel, fg, fgDim, fgMuted, accent, accent2, match, error, green,
- *     yellow, cyan, border, region, regionLine, search
- * syn: comment, keyword, preproc, operator, string, stringSpecial, escape, constant,
- *      function, builtin, macro, type, parameter, property, attribute, tag, label, punctuation
- * term: 16 colors
+ * CSS variables from palette groups. All keys are optional; camelCase becomes kebab-case.
+ * ui:   bg, bgAlt, bgHl, bgSel, fg, fgDim, fgMuted, accent, accent2, match, error, green,
+ *       yellow, cyan, border, region, regionLine, search            -> --bg, --bg-alt, ...
+ * syn:  comment, keyword, preproc, operator, string, stringSpecial, escape, constant,
+ *       function, builtin, macro, type, parameter, property, attribute, tag, label,
+ *       punctuation; optionally variable (default: fg) and number (default: constant)
+ *                                                                    -> --syn-comment, ...
+ * term: 16 colors (an array, or an object of index -> color)        -> --term-0 .. --term-15
  */
-function colorsFrom({ ui, syn, term }) {
+export function themeColorsFrom({ ui = {}, syn = {}, term = [] } = {}) {
   // bgAlt -> bg-alt, accent2 -> accent-2
   const kebab = (k) => k.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`).replace(/(\D)(\d)$/, '$1-$2');
   const out = {};
   for (const [k, v] of Object.entries(ui)) out[`--${kebab(k)}`] = v;
   for (const [k, v] of Object.entries(syn)) out[`--syn-${kebab(k)}`] = v;
-  term.forEach((c, i) => { out[`--term-${i}`] = c; });
+  for (const [i, c] of Object.entries(term)) if (c) out[`--term-${i}`] = c;
   return out;
 }
 
-/** Register a theme. `colors` maps CSS variables to values; `base` copies another theme first. */
-export function defineTheme(name, { label = name, base = null, colors = {} } = {}) {
-  const inherited = base ? themes.get(base)?.colors : null;
-  if (base && !inherited) throw new PolymerError('error', `Unknown base theme: ${base}`);
-  themes.set(name, { name, label, colors: { ...(inherited ?? {}), ...colors } });
-  if (getVarOr('theme', null, null) === name) applyTheme(name);
+let batching = 0; // inside loadThemes: the active theme is re-applied once at the end
+
+/**
+ * Register (or replace) a theme. `ui`, `syn` and `term` are palette groups (see
+ * themeColorsFrom); `colors` maps CSS variables to values directly and wins over them.
+ * `base` names a theme to start from (it may be defined later). If the active theme is
+ * this one or built on it, it is re-applied.
+ */
+export function defineTheme(name, { label = name, base = null, ui, syn, term, colors = {}, file = null } = {}) {
+  if (!name || typeof name !== 'string') throw new PolymerError('error', 'defineTheme: a theme needs a name');
+  let b = base;
+  if (base === name) {
+    // Tweaking the theme this replaces: build on that definition.
+    b = themes.get(name);
+    if (!b) throw new PolymerError('error', `Theme ${name} names itself as its base, but there is no earlier ${name}`);
+  }
+  themes.set(name, { name, label, base: b, file, own: { ...themeColorsFrom({ ui, syn, term }), ...colors } });
+  if (!batching && applied && dependsOn(themes.get(currentTheme()), name)) tryApply(currentTheme());
   return name;
 }
 
-export const themeList = () => [...themes.values()];
+export const themeList = () => [...themes.values()].map(view);
+export const getTheme = (name) => (themes.has(name) ? view(themes.get(name)) : null);
+export const currentTheme = () => getVarOr('theme', null, null);
 
-/** Apply a theme's variables to the document. */
-export function applyTheme(name) {
-  const t = themes.get(name);
-  if (!t) throw new PolymerError('user-error', `Unknown theme: ${name}`);
-  if (typeof document === 'undefined') return t;
-  const root = document.documentElement.style;
-  for (const [k, v] of Object.entries(t.colors)) root.setProperty(k, v);
-  invalidateMetrics();
-  scheduleRedisplay();
-  return t;
+/** Switch to a theme (same as setq('theme', name)). A theme still loading applies when it arrives. */
+export function loadTheme(name) {
+  setq('theme', name, null);
+  return name;
 }
 
-// Changing the variable switches the theme.
+/** The value of a CSS variable in the active theme ('--bg' or 'bg'). */
+export function themeColor(variable) {
+  const v = variable.startsWith('--') ? variable : `--${variable}`;
+  if (typeof document === 'undefined') return getTheme(currentTheme())?.colors[v] ?? null;
+  return getComputedStyle(document.documentElement).getPropertyValue(v).trim() || null;
+}
+
+let applied = null; // variables the applied theme set, to clear ones the next theme doesn't
+
+/**
+ * Apply a theme's variables to the document and run after-load-theme-hook (unless
+ * `hook` is false, as for load-theme's previews).
+ */
+export function applyTheme(name, { hook = true } = {}) {
+  const entry = themes.get(name);
+  if (!entry) throw new PolymerError('user-error', `Unknown theme: ${name}`);
+  const colors = resolveColors(entry);
+  if (typeof document === 'undefined') return view(entry);
+  const root = document.documentElement.style;
+  for (const k of applied ?? []) if (!(k in colors)) root.removeProperty(k);
+  for (const [k, v] of Object.entries(colors)) root.setProperty(k, v);
+  applied = Object.keys(colors);
+  invalidateMetrics();
+  scheduleRedisplay();
+  if (hook) runHooks('after-load-theme-hook', name);
+  return view(entry);
+}
+
+function tryApply(name) {
+  try { applyTheme(name); } catch (e) { message('%s', e.message); }
+}
+
+// Changing the variable switches the theme. A theme that isn't defined yet while themes
+// are loading (init.js pointing custom-theme-directory elsewhere, then picking one from
+// there) is applied once they have loaded.
 let setDuringStartup = false;
 addVariableWatcher('theme', (name, value) => {
   setDuringStartup = true;
-  try { applyTheme(value); } catch (e) { message('%s', e.message); }
+  if (!themes.has(value) && loading) {
+    loading.then(() => { if (currentTheme() === value) tryApply(value); });
+    return;
+  }
+  tryApply(value);
 });
 
 /** At startup: use the theme picked with load-theme last time, unless init.js chose one. */
 export function restoreChosenTheme() {
   const chosen = getVarOr('chosen-theme', null, null);
-  if (!setDuringStartup && chosen && themes.has(chosen) && chosen !== getVarOr('theme', null, null)) setq('theme', chosen, null);
-  else applyTheme(getVarOr('theme', 'gruvbox-dark', null));
+  if (!setDuringStartup && chosen && themes.has(chosen) && chosen !== currentTheme()) setq('theme', chosen, null);
+  else if (themes.has(currentTheme())) tryApply(currentTheme());
+  else if (themes.has('gruvbox-dark')) tryApply('gruvbox-dark');
+  // else: no themes loaded at all; style.css has Gruvbox Dark's colors.
 }
 
+// ---------------------------------------------------------------------------
+// Theme files
+//
+// The theme directory starts with copies of the built-in themes. So that later fixes to
+// those still arrive, <dir>.defaults.json records a hash of each copy as written: a copy
+// that still matches is unedited, so the built-in theme is used and the copy is brought
+// up to date. Once edited, the file is the user's and replaces the built-in theme.
+
+/** The theme directory (custom-theme-directory, expanded, ending in "/"), or null. */
+export function themeDirectory() {
+  const d = getVarOr('custom-theme-directory', null, null);
+  return d ? asDirectory(expandFileName(d)) : null;
+}
+
+const builtinUrl = (name) => new URL(`./builtin/${name}.js`, import.meta.url).href;
+
+async function builtinSource(name) {
+  const res = await fetch(builtinUrl(name));
+  if (!res.ok) throw new PolymerError('error', `Could not read built-in theme ${name} (${res.status})`);
+  return res.text();
+}
+
+const baseName = (path) => path.replace(/^.*[\\/]/, '').replace(/\.js$/, '');
+
+/** FNV-1a of the text with line endings normalized. */
+function hashText(text) {
+  let h = 0x811c9dc5;
+  for (const ch of text.replace(/\r\n?/g, '\n')) {
+    h ^= ch.codePointAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+const manifestPath = (dir) => `${dir}.defaults.json`;
+
+async function readManifest(dir) {
+  try { return JSON.parse((await readTextFile(manifestPath(dir))).text); } catch { return {}; }
+}
+
+const writeManifest = (dir, manifest) => writeTextFile(manifestPath(dir), `${JSON.stringify(manifest, null, 2)}\n`, false);
+
+/** Evaluate theme source and register what it exports under `name`. */
+async function defineFromSource(name, code, path, file) {
+  const exp = await evalModule(code, path);
+  // A file may call defineTheme itself and export nothing.
+  if (exp && typeof exp === 'object' && Object.keys(exp).length) defineTheme(name, { ...exp, file });
+  return name;
+}
+
+/** Load one theme file (the theme is named after the file). Resolves to its name. */
+export async function loadThemeFile(path) {
+  path = expandFileName(path);
+  return defineFromSource(baseName(path), (await readTextFile(path)).text, path, path);
+}
+
+/**
+ * Copy built-in themes to the theme directory: `names` (default all). Existing files are
+ * kept unless `overwrite`. Resolves to the names copied.
+ */
+export async function installDefaultThemes({ names = BUILTIN_THEMES, overwrite = false } = {}) {
+  const dir = themeDirectory();
+  if (!dir || !isTauri) throw new PolymerError('user-error', 'No theme directory (not running in the app?)');
+  await makeDirectory(dir);
+  const manifest = await readManifest(dir);
+  const copied = [];
+  for (const name of names) {
+    const path = `${dir}${name}.js`;
+    if (!overwrite && (await pathInfo(path)).exists) continue;
+    const text = await builtinSource(name);
+    await writeTextFile(path, text, false);
+    manifest[name] = hashText(text);
+    copied.push(name);
+  }
+  if (copied.length) await writeManifest(dir, manifest);
+  return copied;
+}
+
+let loading = null; // the loadThemes in progress
+
+/** Resolves when no theme loading is in progress. */
+export const themesReady = () => loading ?? Promise.resolve();
+
+/**
+ * Load the built-in themes, then the files in the theme directory (`user: false` skips
+ * those), then re-apply the active theme once. Creates the directory with copies of the
+ * built-ins the first time. Resolves to { themes, errors }.
+ */
+export function loadThemes(opts) {
+  const run = (loading ?? Promise.resolve()).then(() => loadThemesNow(opts));
+  loading = run.finally(() => { if (loading === tracked) loading = null; });
+  const tracked = loading;
+  return run;
+}
+
+async function loadThemesNow({ user = true } = {}) {
+  const errors = [];
+  batching++;
+  try {
+    const builtins = await Promise.all(BUILTIN_THEMES.map((name) => builtinSource(name).then((text) => ({ name, text }), (error) => ({ name, error }))));
+    for (const { name, text, error } of builtins) {
+      if (error) { errors.push({ path: builtinUrl(name), error }); continue; }
+      try { await defineFromSource(name, text, builtinUrl(name), null); } catch (e) { errors.push({ path: builtinUrl(name), error: e }); }
+    }
+    const dir = themeDirectory();
+    if (user && dir && isTauri) errors.push(...await loadUserThemes(dir, builtins));
+  } finally {
+    batching--;
+  }
+  if (applied && themes.has(currentTheme())) tryApply(currentTheme());
+  for (const { path, error } of errors) message('Theme %s', describeLoadError(error, path));
+  return { themes: themes.size, errors };
+}
+
+async function loadUserThemes(dir, builtins) {
+  const errors = [];
+  if (!(await pathInfo(dir)).exists) {
+    try {
+      await installDefaultThemes();
+      message('Created %s with the built-in themes', abbreviateFileName(dir));
+    } catch (e) { errors.push({ path: dir, error: e }); }
+  }
+  let names = [];
+  try { names = (await listDirectory(dir)).filter((e) => !e.isDir && e.name.endsWith('.js')).map((e) => e.name); } catch { /* unreadable */ }
+  const files = await Promise.all(names.map((n) => readTextFile(`${dir}${n}`).then(({ text }) => ({ path: `${dir}${n}`, text }), (error) => ({ path: `${dir}${n}`, error }))));
+  const manifest = await readManifest(dir);
+  const builtinText = new Map(builtins.filter((x) => x.text !== undefined).map((x) => [x.name, x.text]));
+  let updated = 0;
+  for (const { path, text, error } of files) {
+    if (error) { errors.push({ path, error }); continue; }
+    const name = baseName(path);
+    const shipped = builtinText.get(name);
+    if (shipped !== undefined && manifest[name] && manifest[name] === hashText(text)) {
+      // An unedited copy: the built-in theme (already defined) stands; refresh the copy.
+      themes.get(name).file = path;
+      if (hashText(shipped) !== manifest[name]) {
+        try {
+          await writeTextFile(path, shipped, false);
+          manifest[name] = hashText(shipped);
+          updated++;
+        } catch (e) { errors.push({ path, error: e }); }
+      }
+      continue;
+    }
+    try { await defineFromSource(name, text, path, path); } catch (e) { errors.push({ path, error: e }); }
+  }
+  if (updated) {
+    try { await writeManifest(dir, manifest); } catch (e) { errors.push({ path: manifestPath(dir), error: e }); }
+  }
+  return errors;
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+
 defcommand('load-theme', { doc: 'Choose a color theme. Moving through the list previews each one.' }, async () => {
-  const original = getVarOr('theme', 'gruvbox-dark', null);
+  const original = currentTheme();
   try {
     const name = await helm({
       prompt: 'Theme: ',
@@ -85,97 +364,59 @@ defcommand('load-theme', { doc: 'Choose a color theme. Moving through the list p
       sources: [{
         name: 'Themes',
         candidates: themeList().map((t) => ({ label: t.label, value: t.name, annotation: t.name === original ? 'current' : t.name })),
-        preview: (n) => applyTheme(n),
+        preview: (n) => applyTheme(n, { hook: false }),
       }],
     });
     setq('theme', name, null);
     setq('chosen-theme', name, null);
     message('Theme: %s', themes.get(name).label);
   } catch (e) {
-    applyTheme(original); // cancelled: undo the preview
+    if (themes.has(original)) applyTheme(original, { hook: false }); // cancelled: undo the preview
     throw e;
   }
 });
 
-// ---------------------------------------------------------------------------
-// Themes
-
-// Gruvbox (morhetz/gruvbox palette)
-const gb = {
-  bg0h: '#1d2021', bg0: '#282828', bg1: '#3c3836', bg2: '#504945', bg3: '#665c54', bg4: '#7c6f64',
-  fg: '#ebdbb2', fg4: '#a89984', gray: '#928374',
-  red: '#fb4934', green: '#b8bb26', yellow: '#fabd2f', blue: '#83a598', purple: '#d3869b', aqua: '#8ec07c', orange: '#fe8019',
-  red2: '#cc241d', green2: '#98971a', yellow2: '#d79921', blue2: '#458588', purple2: '#b16286', aqua2: '#689d6a',
-};
-const gruvboxSyntax = {
-  comment: gb.gray, keyword: gb.red, preproc: gb.aqua, operator: gb.orange, string: gb.green,
-  stringSpecial: gb.aqua, escape: gb.orange, constant: gb.purple, function: gb.green, builtin: gb.orange,
-  macro: gb.aqua, type: gb.yellow, parameter: gb.blue, property: gb.blue, attribute: gb.aqua, tag: gb.red,
-  label: gb.yellow, punctuation: gb.fg4,
-};
-const gruvboxTerm = [gb.bg0, gb.red2, gb.green2, gb.yellow2, gb.blue2, gb.purple2, gb.aqua2, gb.fg4, gb.gray, gb.red, gb.green, gb.yellow, gb.blue, gb.purple, gb.aqua, gb.fg];
-
-defineTheme('gruvbox-dark', {
-  label: 'Gruvbox Dark',
-  colors: colorsFrom({
-    ui: { bg: gb.bg0, bgAlt: gb.bg0h, bgHl: gb.bg1, bgSel: gb.bg2, fg: gb.fg, fgDim: gb.bg4, fgMuted: gb.fg4, accent: gb.blue, accent2: gb.purple, match: gb.orange, error: gb.red, green: gb.green, yellow: gb.yellow, cyan: gb.aqua, border: gb.bg0h, region: gb.bg2, regionLine: gb.bg1, search: gb.bg3 },
-    syn: gruvboxSyntax,
-    term: gruvboxTerm,
-  }),
+defcommand('reload-themes', { doc: 'Load the theme files again (after editing one in the theme directory).' }, async () => {
+  const { themes: n, errors } = await loadThemes();
+  if (!errors.length) message('Loaded %d themes', n);
 });
 
-defineTheme('gruvbox-dark-hard', {
-  label: 'Gruvbox Dark Hard',
-  colors: colorsFrom({
-    ui: { bg: gb.bg0h, bgAlt: '#141617', bgHl: gb.bg0, bgSel: gb.bg1, fg: gb.fg, fgDim: gb.bg4, fgMuted: gb.fg4, accent: gb.blue, accent2: gb.purple, match: gb.orange, error: gb.red, green: gb.green, yellow: gb.yellow, cyan: gb.aqua, border: '#141617', region: gb.bg2, regionLine: gb.bg0, search: gb.bg3 },
-    syn: gruvboxSyntax,
-    term: [gb.bg0h, ...gruvboxTerm.slice(1)],
-  }),
+defcommand('install-default-themes', {
+  doc: 'Copy the built-in themes that are missing from the theme directory into it (existing files are kept).',
+}, async () => {
+  const copied = await installDefaultThemes();
+  const dir = abbreviateFileName(themeDirectory());
+  if (copied.length) message('Copied %s to %s', copied.join(', '), dir);
+  else message('All built-in themes are already in %s', dir);
 });
 
-// Tokyo Night (folke/tokyonight.nvim "night")
-defineTheme('tokyo-night', {
-  label: 'Tokyo Night',
-  colors: colorsFrom({
-    ui: { bg: '#1a1b26', bgAlt: '#16161e', bgHl: '#292e42', bgSel: '#2f3549', fg: '#c0caf5', fgDim: '#565f89', fgMuted: '#737aa2', accent: '#7aa2f7', accent2: '#bb9af7', match: '#ff9e64', error: '#f7768e', green: '#9ece6a', yellow: '#e0af68', cyan: '#7dcfff', border: '#101014', region: '#364a82', regionLine: '#2a3456', search: '#3d59a1' },
-    syn: { comment: '#565f89', keyword: '#bb9af7', preproc: '#7dcfff', operator: '#89ddff', string: '#9ece6a', stringSpecial: '#b4f9f8', escape: '#89ddff', constant: '#ff9e64', function: '#7aa2f7', builtin: '#2ac3de', macro: '#7dcfff', type: '#2ac3de', parameter: '#e0af68', property: '#73daca', attribute: '#bb9af7', tag: '#f7768e', label: '#7dcfff', punctuation: '#9aa5ce' },
-    term: ['#15161e', '#f7768e', '#9ece6a', '#e0af68', '#7aa2f7', '#bb9af7', '#7dcfff', '#a9b1d6', '#414868', '#ff899d', '#9fe044', '#faba4a', '#8db0ff', '#c7a9ff', '#a4daff', '#c0caf5'],
-  }),
+defcommand('find-theme-file', { doc: 'Open a theme\'s file in the theme directory (copying a built-in theme there first).' }, async () => {
+  const dir = themeDirectory();
+  if (!dir || !isTauri) throw new PolymerError('user-error', 'No theme directory (not running in the app?)');
+  const candidates = themeList()
+    .filter((t) => t.file || BUILTIN_THEMES.includes(t.name))
+    .map((t) => ({ label: t.label, value: t.name, annotation: t.file ? abbreviateFileName(t.file) : 'built-in' }));
+  const name = await helm({ prompt: 'Theme file: ', sources: [{ name: 'Themes', candidates }] });
+  const entry = themes.get(name);
+  if (!entry.file) {
+    // The copy is the built-in source, so the theme in use is unchanged.
+    await installDefaultThemes({ names: [name] });
+    entry.file = `${dir}${name}.js`;
+  }
+  const { openFile } = await import('../commands/files.js');
+  return openFile(entry.file);
 });
 
-// Catppuccin Mocha
-const cm = {
-  base: '#1e1e2e', mantle: '#181825', crust: '#11111b', s0: '#313244', s1: '#45475a', s2: '#585b70', o0: '#6c7086', o1: '#7f849c',
-  text: '#cdd6f4', sub0: '#a6adc8', sub1: '#bac2de', rosewater: '#f5e0dc', pink: '#f5c2e7', mauve: '#cba6f7', red: '#f38ba8',
-  maroon: '#eba0ac', peach: '#fab387', yellow: '#f9e2af', green: '#a6e3a1', teal: '#94e2d5', sky: '#89dceb', sapphire: '#74c7ec', blue: '#89b4fa', lavender: '#b4befe',
-};
-defineTheme('catppuccin-mocha', {
-  label: 'Catppuccin Mocha',
-  colors: colorsFrom({
-    ui: { bg: cm.base, bgAlt: cm.mantle, bgHl: cm.s0, bgSel: cm.s1, fg: cm.text, fgDim: cm.o0, fgMuted: cm.o1, accent: cm.blue, accent2: cm.mauve, match: cm.peach, error: cm.red, green: cm.green, yellow: cm.yellow, cyan: cm.sky, border: cm.crust, region: cm.s1, regionLine: cm.s0, search: cm.s2 },
-    syn: { comment: cm.o0, keyword: cm.mauve, preproc: cm.pink, operator: cm.sky, string: cm.green, stringSpecial: cm.pink, escape: cm.pink, constant: cm.peach, function: cm.blue, builtin: cm.red, macro: cm.teal, type: cm.yellow, parameter: cm.maroon, property: cm.lavender, attribute: cm.yellow, tag: cm.mauve, label: cm.sapphire, punctuation: cm.o1 },
-    term: [cm.s1, cm.red, cm.green, cm.yellow, cm.blue, cm.pink, cm.teal, cm.sub1, cm.s2, cm.red, cm.green, cm.yellow, cm.blue, cm.pink, cm.teal, cm.sub0],
-  }),
-});
+let startupDone = false;
 
-// Nord
-const nd = { n0: '#2e3440', n1: '#3b4252', n2: '#434c5e', n3: '#4c566a', n4: '#d8dee9', n5: '#e5e9f0', n6: '#eceff4', n7: '#8fbcbb', n8: '#88c0d0', n9: '#81a1c1', n10: '#5e81ac', red: '#bf616a', orange: '#d08770', yellow: '#ebcb8b', green: '#a3be8c', purple: '#b48ead' };
-defineTheme('nord', {
-  label: 'Nord',
-  colors: colorsFrom({
-    ui: { bg: nd.n0, bgAlt: '#272c36', bgHl: nd.n1, bgSel: nd.n2, fg: nd.n4, fgDim: nd.n3, fgMuted: '#7b88a1', accent: nd.n8, accent2: nd.purple, match: nd.orange, error: nd.red, green: nd.green, yellow: nd.yellow, cyan: nd.n7, border: '#242933', region: nd.n2, regionLine: nd.n1, search: nd.n3 },
-    syn: { comment: '#616e88', keyword: nd.n9, preproc: nd.n10, operator: nd.n9, string: nd.green, stringSpecial: nd.yellow, escape: nd.yellow, constant: nd.purple, function: nd.n8, builtin: nd.n7, macro: nd.n10, type: nd.n7, parameter: nd.n4, property: nd.n4, attribute: nd.n7, tag: nd.n9, label: nd.n7, punctuation: '#a0a8b7' },
-    term: [nd.n1, nd.red, nd.green, nd.yellow, nd.n9, nd.purple, nd.n8, nd.n5, nd.n3, nd.red, nd.green, nd.yellow, nd.n9, nd.purple, nd.n7, nd.n6],
-  }),
-});
+/** Set custom-theme-directory from the config directory unless something already set it. */
+export function initThemeDirectory() {
+  const config = configDirectory();
+  if (!themeDirectory() && config) setq('custom-theme-directory', `${config}themes/`, null);
+  startupDone = true;
+}
 
-// One Dark (Atom)
-const od = { bg: '#282c34', alt: '#21252b', hl: '#2c313a', sel: '#3e4451', fg: '#abb2bf', gray: '#5c6370', red: '#e06c75', green: '#98c379', yellow: '#e5c07b', blue: '#61afef', purple: '#c678dd', cyan: '#56b6c2', orange: '#d19a66' };
-defineTheme('one-dark', {
-  label: 'One Dark',
-  colors: colorsFrom({
-    ui: { bg: od.bg, bgAlt: od.alt, bgHl: od.hl, bgSel: od.sel, fg: od.fg, fgDim: '#4b5263', fgMuted: od.gray, accent: od.blue, accent2: od.purple, match: od.orange, error: od.red, green: od.green, yellow: od.yellow, cyan: od.cyan, border: '#181a1f', region: od.sel, regionLine: od.hl, search: '#4d5566' },
-    syn: { comment: od.gray, keyword: od.purple, preproc: od.purple, operator: od.cyan, string: od.green, stringSpecial: od.cyan, escape: od.cyan, constant: od.orange, function: od.blue, builtin: od.cyan, macro: od.cyan, type: od.yellow, parameter: od.red, property: od.red, attribute: od.orange, tag: od.red, label: od.red, punctuation: od.fg },
-    term: ['#3f4451', od.red, od.green, od.yellow, od.blue, od.purple, od.cyan, '#d7dae0', '#4f5666', '#ff7b86', '#b1e18b', '#efb074', '#67cdff', '#e48bff', '#63d4e0', '#ffffff'],
-  }),
+// Pointing custom-theme-directory elsewhere (e.g. from init.js) loads the themes there.
+addVariableWatcher('custom-theme-directory', () => {
+  if (startupDone) loadThemes().catch((e) => message('Themes: %s', e.message ?? e));
 });
