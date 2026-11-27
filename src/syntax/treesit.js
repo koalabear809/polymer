@@ -318,6 +318,13 @@ const LANGUAGE_ALIASES = {
   yml: 'yaml', jsonc: 'json',
 };
 const snippetCache = new Map(); // `${lang}\0${code}` -> Map(row -> decos)
+let snippetGen = 0;
+
+/**
+ * Goes up each time a snippet language finishes loading. Callers that cache highlighted
+ * output compare it to know when a snippet that came back null might now be highlighted.
+ */
+export const snippetGeneration = () => snippetGen;
 
 /**
  * Highlight a piece of code in a named language: Map(row -> [{ from, to, face, priority }]),
@@ -332,15 +339,20 @@ export function highlightSnippet(langName, code, onReady) {
   if (snippetCache.has(key)) return snippetCache.get(key);
   if (!def.snippet) {
     def.snippet = 'loading';
+    def.snippetWaiters = new Set();
     loadTreesitLanguage(name).then(({ language, query }) => {
       const parser = new Parser();
       parser.setLanguage(language);
       def.snippet = { parser, query };
-      onReady?.();
-    }).catch(() => { def.snippet = { failed: true }; });
+      snippetGen++;
+      for (const fn of def.snippetWaiters) fn();
+    }).catch(() => { def.snippet = { failed: true }; }).finally(() => { def.snippetWaiters = null; });
+  }
+  if (def.snippet === 'loading') {
+    // Everyone who asked while it loads is told, not just the first caller.
+    if (onReady) def.snippetWaiters.add(onReady);
     return null;
   }
-  if (def.snippet === 'loading') return null;
   const { parser, query, failed } = def.snippet;
   if (failed || !query) return null;
   const tree = parser.parse(code);

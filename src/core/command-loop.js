@@ -84,113 +84,56 @@ function scheduleWhichKey(nodes, keys) {
   else whichKeyTimer = setTimeout(show, getVarOr('which-key-idle-delay', 400));
 }
 
-let repeatTimer = null;
-let repeatKey = null;
-let repeatEvent = null;
-let lastCommand = null;
-let lastCommandRepeatable = true;
+// Commands that change state or prompt shouldn't run again while their key is held.
+const NON_REPEATABLE = new Set([
+  // Vim state changes
+  'vim-insert', 'vim-append', 'vim-insert-line', 'vim-append-line',
+  'vim-open-below', 'vim-open-above', 'vim-insert-resume',
+  'vim-visual-char', 'vim-visual-line', 'vim-visual-block',
+  'vim-replace-state', 'vim-normal-state',
+  'vim-substitute', 'vim-change-line', 'vim-change-whole-line',
+  // Ex commands
+  'vim-ex',
+  // Commands that read input
+  'execute-extended-command', 'eval-expression',
+  'helm-M-x', 'helm-find-file', 'helm-switch-buffer',
+  'save-buffer', 'write-file', 'find-file',
+  'query-replace', 'query-replace-regexp',
+  // Misc
+  'keyboard-quit', 'undo', 'redo',
+]);
 
-// Check if a command should be repeatable
+/** False for commands marked `repeatable: false` and those in NON_REPEATABLE. */
 function isCommandRepeatable(cmd) {
-  if (!cmd) return false;
-  
-  // Get command info
-  const info = typeof cmd === 'string' ? functionInfo(cmd) : null;
-  
-  // Explicitly marked as non-repeatable
-  if (info?.repeatable === false) return false;
-  
-  // State-changing commands shouldn't repeat
-  const nonRepeatableCommands = new Set([
-    // Vim mode changes
-    'vim-insert', 'vim-append', 'vim-insert-line', 'vim-append-line',
-    'vim-open-below', 'vim-open-above', 'vim-insert-resume',
-    'vim-visual-char', 'vim-visual-line', 'vim-visual-block',
-    'vim-replace-state', 'vim-normal-state',
-    'vim-substitute', 'vim-change-line', 'vim-change-whole-line',
-    
-    // Ex commands
-    'vim-ex',
-    
-    // Special input commands
-    'execute-extended-command', 'eval-expression',
-    'helm-M-x', 'helm-find-file', 'helm-switch-buffer',
-    
-    // Commands that prompt
-    'save-buffer', 'write-file', 'find-file',
-    'query-replace', 'query-replace-regexp',
-    
-    // Misc
-    'keyboard-quit', 'undo', 'redo',
-  ]);
-  
-  if (typeof cmd === 'string' && nonRepeatableCommands.has(cmd)) {
-    return false;
-  }
-  
-  return true;
+  if (typeof cmd !== 'string') return true;
+  return functionInfo(cmd)?.repeatable !== false && !NON_REPEATABLE.has(cmd);
 }
 
+// The key last pressed, and whether holding it should not repeat. Decided on the first
+// press: by the time repeats arrive, a command like vim-insert has changed the state and
+// the key would look up as plain text.
+let held = null; // { key, block }
+
+/**
+ * Held keys repeat through the OS's own auto-repeat: the webview still sends repeated
+ * keydown events (e.repeat) when the first one was preventDefault-ed, and unbound keys
+ * repeat their text into the input as usual. Holding a prefix key or a non-repeatable
+ * command doesn't repeat.
+ */
 export function handleKeyEvent(e) {
   const key = keyFromEvent(e);
   if (!key) return;
-  
-  // Handle key repeat
-  if (e.type === 'keydown' && e.repeat) {
-    // Browser's native repeat - process the key
-    processKey(key, e);
-    return;
+  if (e.repeat) {
+    if (held?.key === key && held.block) { consume(e); return; }
+  } else {
+    const ctx = activeContext();
+    const res = capture || charCapture ? null : lookupKey(ctx.keymaps, ctx.state, [...pending, key]);
+    held = { key, block: res?.type === 'prefix' || (res?.type === 'command' && !isCommandRepeatable(res.cmd)) };
   }
-  
-  // Clear any existing repeat timer
-  if (repeatTimer) {
-    clearInterval(repeatTimer);
-    repeatTimer = null;
-    repeatKey = null;
-    repeatEvent = null;
-  }
-  
-  // Process the initial keydown and check what command it executed
-  const ctx = activeContext();
-  const keys = [...pending, key];
-  const res = lookupKey(ctx.keymaps, ctx.state, keys);
-  const boundCommand = res?.type === 'command' ? res.cmd : null;
-  
   processKey(key, e);
-  
-  // Determine if this command is repeatable
-  lastCommand = boundCommand;
-  lastCommandRepeatable = isCommandRepeatable(boundCommand);
-  
-  // Start repeat timer
-  // Don't repeat if:
-  // - We're in a capture state or have pending keys
-  // - The command is non-repeatable
-  // - It's a standalone modifier key
-  const isModifierOnly = ['C-', 'M-', 'S-', 's-'].some(mod => key === mod.slice(0, -1));
-  if (e.type === 'keydown' && !e.repeat && !isModifierOnly && !capture && !pending.length && lastCommandRepeatable) {
-    repeatKey = key;
-    repeatEvent = e;
-    
-    // Start repeating after initial delay
-    setTimeout(() => {
-      if (repeatKey === key) {
-        repeatTimer = setInterval(() => {
-          if (repeatKey === key && !capture && !pending.length) {
-            processKey(key, null);
-          } else {
-            clearInterval(repeatTimer);
-            repeatTimer = null;
-            repeatKey = null;
-            repeatEvent = null;
-          }
-        }, 33); // ~30 times per second
-      }
-    }, 500); // Initial delay before repeat starts
-  }
 }
 
-const keyText = (key) => (key === 'SPC' ? ' ' : key === 'RET' ? '\n' : key === 'TAB' ? '\t' : key);
+const keyText = (key) => (key === 'SPC' || key === 'S-SPC' ? ' ' : key === 'RET' ? '\n' : key === 'TAB' ? '\t' : key);
 
 /**
  * Process one key. `e` is the DOM event, or null when keys are replayed
@@ -384,24 +327,8 @@ export function readKeySequence(prompt = 'Describe key: ') {
   return new Promise((resolve, reject) => { capture = { resolve, reject, prompt }; });
 }
 
-function handleKeyUp(e) {
-  const key = keyFromEvent(e);
-  if (!key) return;
-  
-  // Stop repeat if this was the repeating key
-  if (repeatKey === key) {
-    if (repeatTimer) {
-      clearInterval(repeatTimer);
-      repeatTimer = null;
-    }
-    repeatKey = null;
-    repeatEvent = null;
-  }
-}
-
 export function installKeyHandler(target = window) {
   target.addEventListener('keydown', handleKeyEvent, true);
-  target.addEventListener('keyup', handleKeyUp, true);
 }
 
 export { normalizeKey };

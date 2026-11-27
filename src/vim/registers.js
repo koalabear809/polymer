@@ -20,7 +20,7 @@ import { currentBuffer } from '../core/buffer.js';
 import { readClipboardText, writeClipboardText } from '../core/clipboard.js';
 
 defvar('vim-clipboard', true, {
-  doc: 'When true, yanks and deletes without an explicit register are also copied to the system clipboard.',
+  doc: 'When true, deletes without an explicit register are also copied to the system clipboard. (Yanks without one always are.)',
 });
 
 const registers = new Map();
@@ -71,7 +71,7 @@ export function storeRegister(name, text, type, kind) {
     } else {
       registers.set('-', value);
     }
-    if (getVarOr('vim-clipboard', true)) copyToClipboard(text);
+    if (kind === 'yank' || getVarOr('vim-clipboard', true)) copyToClipboard(text);
   }
   registers.set('"', value);
 }

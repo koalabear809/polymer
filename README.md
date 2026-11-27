@@ -240,9 +240,9 @@ src-tauri/            Rust backend (files, processes, terminals, MCP server)
   directory (on a file it shows actions); `C-l` or `DEL` at a `/` goes up;
   `SPC f s` / `Cmd-S` save, `SPC f S` save as, `SPC f r` recent files, `SPC b r` revert
 - `M-x` / `SPC :` run a command; `SPC e l` / `SPC e b` evaluate line / buffer as JavaScript
-- System clipboard: yanks are copied to it (`vim-clipboard`). On Windows and Linux, `C-v`
-  pastes in insert state and `C-c` copies a visual selection; `C-S-v` / `C-S-c` work in any
-  state. On macOS, Cmd-V / Cmd-C.
+- System clipboard: `y` copies to it (deletes too, unless `vim-clipboard` is false). On
+  Windows and Linux, `C-v` pastes in insert state; `C-S-v` pastes in any state and
+  `C-S-c` copies a visual selection. On macOS, Cmd-V / Cmd-C.
 - `SPC h f` / `SPC h v` / `SPC h k` describe a function / variable / key
 - `SPC b b` switch buffers; in helm: `C-j`/`C-k` move, `TAB` actions, `C-SPC` mark,
   `C-z` preview, `Esc` for normal state (`j`/`k`, `gg`/`G`), `C-g` quit

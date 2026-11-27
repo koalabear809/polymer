@@ -120,7 +120,10 @@ export function parseKeys(seq) {
 
 export const keysToString = (keys) => keys.join(' ');
 
-/** True for keys that would insert a character (no C-/M-/s- modifier). */
+/**
+ * True for keys that would insert a character (no C-/M-/s- modifier). Shift+Space types a
+ * space too: Shift is often still held from a capital letter when typing fast ("I am").
+ */
 export function isPrintableKey(key) {
-  return key.length === 1 || key === 'SPC';
+  return key.length === 1 || key === 'SPC' || key === 'S-SPC';
 }

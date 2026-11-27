@@ -222,12 +222,13 @@ defineKey({ keymaps: 'global', states: 'replace' }, {
 });
 
 // ---------------------------------------------------------------------------
-// System clipboard. macOS uses Cmd-C / Cmd-V (handled natively); elsewhere Ctrl is the
-// clipboard modifier, so Ctrl-V pastes in insert state and Ctrl-C copies a selection.
-// Ctrl-Shift-C / Ctrl-Shift-V work in every state (normal-state Ctrl-V stays visual block).
+// System clipboard. macOS uses Cmd-C / Cmd-V (handled natively); elsewhere Ctrl-V pastes in
+// insert state and Ctrl-Shift-V in every state (normal-state Ctrl-V stays visual block).
+// Copy with y (yanks always reach the system clipboard) or Ctrl-Shift-C; plain Ctrl-C is
+// left unbound in visual state.
 
 if (!isMac) {
   defineKey({ keymaps: 'global', states: ['insert', 'replace'] }, { 'C-v': 'clipboard-paste' });
   defineKey({ keymaps: 'global', states: ['normal', 'visual', 'insert', 'replace'] }, { 'C-S-v': 'clipboard-paste' });
-  defineKey({ keymaps: 'global', states: 'visual' }, { 'C-c': 'vim-yank', 'C-S-c': 'vim-yank' });
+  defineKey({ keymaps: 'global', states: 'visual' }, { 'C-S-c': 'vim-yank' });
 }

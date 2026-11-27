@@ -24,7 +24,7 @@ import {
 } from '../core/files.js';
 import { AcpClient } from './acp.js';
 import { viewMetrics } from '../core/view.js';
-import { highlightSnippet } from '../syntax/treesit.js';
+import { highlightSnippet, snippetGeneration } from '../syntax/treesit.js';
 import { renderMarkdown } from './markdown.js';
 import { imageMimeType } from '../commands/image.js';
 
@@ -180,18 +180,35 @@ function wrapSegments(text, width) {
 // ---------------------------------------------------------------------------
 // Images
 
+// Blob URLs hold their image in memory until revoked. Each agent tracks the images it made
+// URLs for (a.imageObjs) and the files it loaded (a.fileImages), and frees them when the
+// conversation is cleared or the buffer is killed (releaseImages).
+
 /** A blob: URL for an image { mimeType, data (base64) }, made once and kept on the object. */
-function imageUrl(im) {
+function imageUrl(a, im) {
   if (!im.url) {
     const bin = atob(im.data);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     im.url = URL.createObjectURL(new Blob([bytes], { type: im.mimeType || 'image/png' }));
+    a.imageObjs.add(im);
   }
   return im.url;
 }
 
-const fileImages = new Map(); // path -> blob: URL, or null while loading / if it failed
+/** Free one image's blob URL (it gets a new one if shown again). */
+function releaseImage(a, im) {
+  if (im.url) URL.revokeObjectURL(im.url);
+  delete im.url;
+  a.imageObjs.delete(im);
+}
+
+/** Free every blob URL the agent made. */
+function releaseImages(a) {
+  for (const im of a.imageObjs) releaseImage(a, im);
+  for (const url of a.fileImages.values()) if (url) URL.revokeObjectURL(url);
+  a.fileImages.clear();
+}
 
 /**
  * What to show for ![alt](src) in the agent's Markdown: data: URLs and local image files
@@ -207,12 +224,32 @@ function markdownImageUrl(b, src) {
   path = expandFileName(path.replace(/\\/g, '/'), asDirectory(b.agent.cwd));
   const type = imageMimeType(path);
   if (!type || !isTauri) return null;
+  const { fileImages } = b.agent;
   if (fileImages.has(path)) return fileImages.get(path);
   fileImages.set(path, null);
   invoke('read_binary_file', { path })
-    .then((buf) => { fileImages.set(path, URL.createObjectURL(new Blob([buf], { type }))); scheduleRedraw(b); })
+    .then((buf) => {
+      // Released (conversation cleared, buffer killed) while it was loading: drop it.
+      if (fileImages.get(path) !== null || !b.live) return;
+      fileImages.set(path, URL.createObjectURL(new Blob([buf], { type })));
+      scheduleRedraw(b);
+    })
     .catch(() => {});
   return null;
+}
+
+/**
+ * Drop pasted images whose [image #n] text is gone from both the input and the queued
+ * prompts, freeing their memory.
+ */
+function pruneAttachments(b) {
+  const a = b.agent;
+  const texts = [b.getText(b.readOnlyBefore.pos, b.length), ...a.promptQueue];
+  a.attachments = a.attachments.filter((att) => {
+    if (texts.some((t) => t.includes(`[image #${att.n}]`))) return true;
+    releaseImage(a, att);
+    return false;
+  });
 }
 
 /** A pasted image: attach it to the next message and mark its place in the input. */
@@ -260,6 +297,32 @@ const HEADER_FIELDS = {
     return `Cost: ~$${((a.tokens.input / 1e6) * costs.input + (a.tokens.output / 1e6) * costs.output).toFixed(4)}`;
   },
 };
+
+/**
+ * An assistant message rendered as Markdown lines, cached on the item. Streaming redraws
+ * on every chunk; without the cache each one re-rendered every reply in the conversation.
+ * The cache is rebuilt when the text, the width or the raw setting changes, or, for a
+ * reply whose code blocks rendered unhighlighted, when a highlighter language has loaded.
+ */
+function assistantMarkdown(b, item, columns) {
+  const raw = !getVarOr('agent-render-markdown', true, b);
+  const gen = snippetGeneration();
+  const c = item.mdCache;
+  if (c && c.text === item.text && c.columns === columns && c.raw === raw && (!c.missed || c.gen === gen)) return c.lines;
+  let missed = false; // a code block came back unhighlighted (unknown or still-loading language)
+  const lines = renderMarkdown(item.text, {
+    raw,
+    columns,
+    highlight: (lang, code) => {
+      const h = highlightSnippet(lang, code, () => scheduleRedraw(b));
+      if (!h) missed = true;
+      return h;
+    },
+  });
+  // Not enumerable, so saving or copying items leaves it out.
+  Object.defineProperty(item, 'mdCache', { value: { text: item.text, columns, raw, gen, missed, lines }, writable: true, configurable: true });
+  return lines;
+}
 
 function render(b) {
   const a = b.agent;
@@ -317,20 +380,15 @@ function render(b) {
     prevType = item.type;
     if (item.type === 'user') {
       const shown = item.text.split('\n').map((l, k) => (k ? `  ${l}` : `${PROMPT}${l}`));
-      const images = (item.images ?? []).map((im) => ({ src: imageUrl(im), alt: 'image' }));
+      const images = (item.images ?? []).map((im) => ({ src: imageUrl(a, im), alt: 'image' }));
       shown.forEach((l, k) => push(l, { decos: [{ from: 0, to: l.length, face: 'agent-user' }], item, ...(k === shown.length - 1 ? { images } : {}) }));
     } else if (item.type === 'assistant') {
-      const md = renderMarkdown(item.text, {
-        raw: !getVarOr('agent-render-markdown', true, b),
-        columns: wrapAt ?? windowColumns(b),
-        highlight: (lang, code) => highlightSnippet(lang, code, () => scheduleRedraw(b)),
-      });
-      for (const l of md) {
+      for (const l of assistantMarkdown(b, item, wrapAt ?? windowColumns(b))) {
         const images = l.decos.filter((d) => d.picture).map((d) => ({ src: markdownImageUrl(b, d.url), alt: d.alt })).filter((im) => im.src);
         push(l.text, { decos: l.decos, item, images, ...(l.lineFace ? { lineFace: l.lineFace } : {}) });
       }
     } else if (item.type === 'image') {
-      const src = item.data ? imageUrl(item) : null;
+      const src = item.data ? imageUrl(a, item) : null;
       const label = src ? '[image]' : `[image: ${item.uri ?? item.mimeType}]`;
       push(label, { decos: [{ from: 0, to: label.length, face: 'agent-dim' }], item, images: src ? [{ src, alt: 'image' }] : [] });
     } else if (item.type === 'thought') {
@@ -361,7 +419,7 @@ function render(b) {
       push(`${text}${where}`, { decos: [{ from: 2, to: 3, face: `agent-status-${item.status}` }, { from: 4, to: text.length, face: 'agent-tool' }, { from: text.length, to: text.length + where.length, face: 'agent-dim' }], item });
       for (const c of item.content ?? []) {
         if (c.type === 'content' && c.content?.type === 'image' && c.content.data) {
-          push('    [image]', { lineFace: 'agent-output', item, images: [{ src: imageUrl(c.content), alt: 'image' }] });
+          push('    [image]', { lineFace: 'agent-output', item, images: [{ src: imageUrl(a, c.content), alt: 'image' }] });
           continue;
         }
         let out = [];
@@ -404,7 +462,7 @@ function render(b) {
       const hint = '  goes with your next message (delete its [image #n] text to drop it)';
       push(label + hint, {
         decos: [{ from: 0, to: label.length, face: 'agent-tool' }, { from: label.length, to: label.length + hint.length, face: 'agent-dim' }],
-        images: [{ src: imageUrl(att), alt: `image #${att.n}` }],
+        images: [{ src: imageUrl(a, att), alt: `image #${att.n}` }],
       });
     }
     if (!status) push('');
@@ -607,6 +665,7 @@ export async function openAgent({ name = getVarOr('agent-default', 'claude-code'
     steerPrompts: [], // Active steering prompts
     tokens: { input: 0, output: 0 }, // Token usage tracking
     attachments: [], nextImage: 1, // pasted images waiting to be sent: [{ n, mimeType, data }]
+    imageObjs: new Set(), fileImages: new Map(), // blob URLs to free (see releaseImages)
   };
   b.onPasteImage = (image) => attachImage(b, image);
   b.decorators.push((buf, line) => {
@@ -844,6 +903,9 @@ export async function agentSend(b, text, options = {}) {
   }
   const images = a.attachments.filter((x) => text.includes(`[image #${x.n}]`));
   a.attachments = a.attachments.filter((x) => !images.includes(x));
+  // Sending the input cleared it and its undo history, so images it no longer mentions
+  // can't come back. (A queued send leaves the draft, which undo may still restore.)
+  if (fromInput) pruneAttachments(b);
   a.items.push({ type: 'user', text, ...(images.length ? { images } : {}) });
   a.busy = true;
   a.turn = { text, stderr: '', start: a.items.length };
@@ -963,6 +1025,7 @@ defcommand('agent-view-queue', { doc: 'View and manage the prompt queue.' }, asy
       const removed = a.promptQueue.splice(choice.index, 1)[0];
       message('Removed from queue: %s', removed.slice(0, 40));
     }
+    pruneAttachments(b);
     scheduleRedraw(b);
   } catch (e) {
     // User cancelled
@@ -1185,6 +1248,7 @@ defcommand('agent-new-session', { doc: 'Start a fresh conversation in this buffe
   if (b.agent.busy) await b.agent.client.cancel(b.agent.sessionId).catch(() => {});
   await saveTranscript(b).catch(() => {});
   b.agent.transcript = null; // the next conversation gets its own file
+  releaseImages(b.agent);
   b.agent.items = [];
   b.agent.attachments = [];
   b.agent.status = 'new session…';
@@ -1266,6 +1330,7 @@ addHook('kill-buffer-hook', function agentStop(b) {
   if (!b.agent) return;
   saveTranscript(b).catch(() => {});
   if (b.agent.client) b.agent.client.kill();
+  releaseImages(b.agent);
 });
 
 // ---------------------------------------------------------------------------
