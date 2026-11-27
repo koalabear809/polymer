@@ -469,7 +469,6 @@ export function renderView(win, selected, point) {
   const showCursor = (selected || getVarOr('cursor-in-non-selected-windows', true, buf)) && !buf.cursorHidden;
   cursor.hidden = !showCursor;
   if (showCursor) {
-    const { x, w } = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
     const lineText = buf.lineText(pos.line);
     const ch = pos.col < lineText.length ? lineText[pos.col] : ' ';
     const state = selected ? buf.state : 'inactive';
@@ -477,23 +476,72 @@ export function renderView(win, selected, point) {
     const shape = (state !== 'inactive' && buf.cursorShape) || ({ insert: 'bar', replace: 'underline', operator: 'underline', inactive: 'hollow' }[state] ?? 'block');
     cursor.className = `cursor cursor-${shape} state-${state}`;
     cursor.textContent = ch === '\t' ? ' ' : ch;
-    cursor.style.width = `${Math.max(w, 2)}px`;
-    cursor.style.height = `${lh}px`;
-    const cx = gutterPx + x;
     
-    // Calculate Y position - for wrapped lines, get from DOM; otherwise use line * lh
-    let cy;
+    let cx, cy, w;
+    
     if (wrapped) {
+      // For wrapped lines, use Range API to get actual cursor position
       const lineEl = win.lineEls.get(pos.line);
       if (lineEl) {
-        cy = lineEl.offsetTop;
+        const lt = lineEl.querySelector('.lt');
+        if (lt && pos.col <= lineText.length) {
+          // Get DOM position for the cursor column
+          const domPos = domPosition(lt, pos.col);
+          if (domPos) {
+            const range = document.createRange();
+            range.setStart(domPos.node, domPos.offset);
+            range.setEnd(domPos.node, domPos.offset);
+            const rect = range.getBoundingClientRect();
+            const bodyRect = body.getBoundingClientRect();
+            
+            // Calculate position relative to body
+            cx = rect.left - bodyRect.left + body.scrollLeft;
+            cy = rect.top - bodyRect.top + body.scrollTop;
+            
+            // Get width of character
+            if (pos.col < lineText.length) {
+              const nextDomPos = domPosition(lt, pos.col + 1);
+              if (nextDomPos && nextDomPos.node === domPos.node) {
+                range.setEnd(nextDomPos.node, nextDomPos.offset);
+                const charRect = range.getBoundingClientRect();
+                w = charRect.width;
+              } else {
+                w = cw; // Fallback
+              }
+            } else {
+              w = cw; // Space at end of line
+            }
+          } else {
+            // Fallback to old method
+            const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
+            cx = gutterPx + geom.x;
+            cy = lineEl.offsetTop;
+            w = geom.w;
+          }
+        } else {
+          // Fallback
+          const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
+          cx = gutterPx + geom.x;
+          cy = lineEl ? lineEl.offsetTop : pos.line * lh;
+          w = geom.w;
+        }
       } else {
-        cy = pos.line * lh; // Fallback
+        // No line element, fallback
+        const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
+        cx = gutterPx + geom.x;
+        cy = pos.line * lh;
+        w = geom.w;
       }
     } else {
+      // Normal (non-wrapped) mode
+      const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
+      cx = gutterPx + geom.x;
       cy = pos.line * lh;
+      w = geom.w;
     }
     
+    cursor.style.width = `${Math.max(w, 2)}px`;
+    cursor.style.height = `${lh}px`;
     cursor.style.transform = `translate(${cx}px, ${cy}px)`;
     cursor.dataset.x = cx;
     cursor.dataset.y = cy;
