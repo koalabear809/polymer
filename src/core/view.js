@@ -276,12 +276,38 @@ export function offsetFromEvent(win, e) {
   const buf = win.buffer;
   const { cw, lh } = viewMetrics();
   const rect = win.bodyEl.getBoundingClientRect();
+  const wrapped = !getVarOr('truncate-lines', true, buf);
+  const tabWidth = getVarOr('tab-width', 4, buf);
+  
+  // For wrapped lines, use caretRangeFromPoint directly since Y position doesn't map to line number
+  if (wrapped && document.caretRangeFromPoint) {
+    const r = document.caretRangeFromPoint(e.clientX, e.clientY);
+    if (r) {
+      // Find which line element contains this range
+      for (const [lineNum, lineEl] of win.lineEls) {
+        const lt = lineEl.querySelector('.lt');
+        if (lt && lt.contains(r.startContainer)) {
+          const text = buf.lineText(lineNum);
+          let col = 0;
+          const walker = document.createTreeWalker(lt, NodeFilter.SHOW_TEXT, {
+            acceptNode: (n) => (n.parentElement?.closest('[data-virtual]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+          });
+          for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+            if (n === r.startContainer) { col += r.startOffset; break; }
+            col += n.length;
+          }
+          return buf.lineStart(lineNum) + Math.min(col, text.length);
+        }
+      }
+    }
+  }
+  
+  // Non-wrapped mode: calculate line from Y coordinate
   const y = e.clientY - rect.top + win.bodyEl.scrollTop;
   const line = Math.max(0, Math.min(buf.lineCount - 1, Math.floor(y / lh)));
   const text = buf.lineText(line);
   const x = e.clientX - rect.left + win.bodyEl.scrollLeft - gutterPixels(buf);
   if (x <= 0) return buf.lineStart(line);
-  const tabWidth = getVarOr('tab-width', 4, buf);
   const lineEl = win.lineEls.get(line);
   if (!isPlainLine(text) && lineEl && document.caretRangeFromPoint) {
     const r = document.caretRangeFromPoint(e.clientX, e.clientY);
@@ -399,7 +425,8 @@ export function renderView(win, selected, point) {
 
   // Keep the cursor visible, or (after a user scroll) keep the cursor inside the view.
   let newPoint = point;
-  if (pointMoved) {
+  if (pointMoved && !wrapped) {
+    // For non-wrapped lines, use line-based scrolling
     const top = (pos.line - margin) * lh;
     const bottom = (pos.line + 1 + margin) * lh;
     if (top < body.scrollTop) setScroll(win, Math.max(0, top));
@@ -470,46 +497,79 @@ export function renderView(win, selected, point) {
   cursor.hidden = !showCursor;
   if (showCursor) {
     const lineText = buf.lineText(pos.line);
-    const ch = pos.col < lineText.length ? lineText[pos.col] : ' ';
     const state = selected ? buf.state : 'inactive';
     // A buffer can override the shape (terminals keep a block cursor in insert state).
     const shape = (state !== 'inactive' && buf.cursorShape) || ({ insert: 'bar', replace: 'underline', operator: 'underline', inactive: 'hollow' }[state] ?? 'block');
     cursor.className = `cursor cursor-${shape} state-${state}`;
-    cursor.textContent = ch === '\t' ? ' ' : ch;
     
     let cx, cy, w;
     
     if (wrapped) {
       // For wrapped lines, use Range API to get actual cursor position
       const lineEl = win.lineEls.get(pos.line);
-      if (lineEl) {
+      if (lineEl && lineEl.isConnected) {
         const lt = lineEl.querySelector('.lt');
-        if (lt && pos.col <= lineText.length) {
+        if (lt) {
           // Get DOM position for the cursor column
           const domPos = domPosition(lt, pos.col);
           if (domPos) {
             const range = document.createRange();
-            range.setStart(domPos.node, domPos.offset);
-            range.setEnd(domPos.node, domPos.offset);
-            const rect = range.getBoundingClientRect();
             const bodyRect = body.getBoundingClientRect();
             
-            // Calculate position relative to body
-            cx = rect.left - bodyRect.left + body.scrollLeft;
-            cy = rect.top - bodyRect.top + body.scrollTop;
-            
-            // Get width of character
             if (pos.col < lineText.length) {
+              // Position cursor at the character position
+              // First, get the insertion point at pos.col
+              range.setStart(domPos.node, domPos.offset);
+              range.setEnd(domPos.node, domPos.offset);
+              const insertRect = range.getBoundingClientRect();
+              
+              // Then measure the character to get its width
               const nextDomPos = domPosition(lt, pos.col + 1);
-              if (nextDomPos && nextDomPos.node === domPos.node) {
+              if (nextDomPos) {
+                range.setStart(domPos.node, domPos.offset);
                 range.setEnd(nextDomPos.node, nextDomPos.offset);
-                const charRect = range.getBoundingClientRect();
-                w = charRect.width;
+                
+                // Get all rects for the character
+                const rects = range.getClientRects();
+                
+                if (rects.length > 0) {
+                  // When a character wraps, getClientRects() can return multiple rects
+                  // Find the rect with non-zero width (that's where the character actually appears)
+                  let charRect = null;
+                  for (let i = 0; i < rects.length; i++) {
+                    if (rects[i].width > 0) {
+                      charRect = rects[i];
+                      break;
+                    }
+                  }
+                  
+                  // If all rects have zero width (shouldn't happen), use the last one
+                  if (!charRect) charRect = rects[rects.length - 1];
+                  
+                  // The cursor should be where the character actually appears
+                  cx = charRect.left - bodyRect.left + body.scrollLeft;
+                  cy = charRect.top - bodyRect.top + body.scrollTop;
+                  w = charRect.width || cw;
+                } else {
+                  // Fallback
+                  cx = insertRect.left - bodyRect.left + body.scrollLeft;
+                  cy = insertRect.top - bodyRect.top + body.scrollTop;
+                  w = cw;
+                }
               } else {
-                w = cw; // Fallback
+                // Fallback: use insertion point
+                cx = insertRect.left - bodyRect.left + body.scrollLeft;
+                cy = insertRect.top - bodyRect.top + body.scrollTop;
+                w = cw;
               }
             } else {
-              w = cw; // Space at end of line
+              // At end of line - use insertion point
+              range.setStart(domPos.node, domPos.offset);
+              range.setEnd(domPos.node, domPos.offset);
+              const rect = range.getBoundingClientRect();
+              cx = rect.left - bodyRect.left + body.scrollLeft;
+              cy = rect.top - bodyRect.top + body.scrollTop;
+              w = cw;
             }
           } else {
             // Fallback to old method
@@ -540,6 +600,10 @@ export function renderView(win, selected, point) {
       w = geom.w;
     }
     
+    // Set cursor character - show space for special chars
+    const ch = pos.col < lineText.length ? lineText[pos.col] : ' ';
+    cursor.textContent = (ch === '\t' || ch === '\n' || ch === '\r') ? ' ' : ch;
+    
     cursor.style.width = `${Math.max(w, 2)}px`;
     cursor.style.height = `${lh}px`;
     cursor.style.transform = `translate(${cx}px, ${cy}px)`;
@@ -551,6 +615,18 @@ export function renderView(win, selected, point) {
       const viewW = body.clientWidth;
       if (cx - gutterPx < body.scrollLeft) setScroll(win, undefined, Math.max(0, cx - gutterPx - 4 * cw));
       else if (cx + w > body.scrollLeft + viewW) setScroll(win, undefined, cx + w - viewW + 4 * cw);
+    }
+    
+    // Vertical scrolling for wrapped lines (use actual cursor Y position)
+    if (pointMoved && wrapped) {
+      const cursorTop = cy;
+      const cursorBottom = cy + lh;
+      const marginPx = margin * lh;
+      if (cursorTop - marginPx < body.scrollTop) {
+        setScroll(win, Math.max(0, cursorTop - marginPx), undefined);
+      } else if (cursorBottom + marginPx > body.scrollTop + viewH) {
+        setScroll(win, cursorBottom + marginPx - viewH, undefined);
+      }
     }
   }
 
