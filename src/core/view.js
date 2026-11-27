@@ -8,6 +8,7 @@
 // The gutter is position: sticky, so it stays put when scrolling horizontally.
 
 import { defvar, getVarOr } from './registry.js';
+import { scheduleRedisplay } from './redisplay.js';
 import { overlaysIn } from './marker.js';
 import { isPlainLine, visualColumn, columnForVisual, cellWidthAt } from './width.js';
 
@@ -74,6 +75,14 @@ export function createView(win, onScroll) {
     win.programmaticScroll = false;
     onScroll();
   });
+  // Wrapped text reflows with the window width: redisplay (cursor, overlays, hooks) on any width change.
+  if (typeof ResizeObserver !== 'undefined') {
+    let lastW = 0;
+    new ResizeObserver(() => {
+      const w = body.clientWidth;
+      if (w && w !== lastW) { lastW = w; scheduleRedisplay(); }
+    }).observe(body);
+  }
   Object.assign(win, { bodyEl: body, spacerEl: spacer, linesEl: lines, cursorEl: cursor });
   win.lineEls = new Map(); // line number -> element (visible lines only)
   win.renderKey = null;

@@ -44,7 +44,7 @@ defvar('agent-transcript-save-delay', 2000, { doc: 'Milliseconds of quiet before
 defvar('agent-thought-level', 'full', { doc: 'How much of the agent\'s thinking text to display (a display filter only; the agent\'s real effort is set with select-effort): "none" (hide all thoughts), "summary" (show brief thoughts), or "full" (show all thoughts).' });
 defvar('agent-models', {}, { doc: 'Extra model labels, merged over what the agent reports: { id: { label, description } }. Normally empty; the session\'s own model list is used.' });
 defvar('agent-default-model', null, { doc: 'Model ID to switch new agent sessions to (nil keeps the agent\'s own default).' });
-defvar('agent-wrap-column', 'auto', { doc: 'Hard-wrap agent text at this column so wrapped lines are real lines: "auto" (window width), a number, or 0 to disable.' });
+defvar('agent-wrap-column', 0, { doc: 'Hard-wrap agent text at this column so wrapped lines are real lines: "auto" (window width), a number, or 0 to disable (default; agent buffers soft-wrap and reflow on resize).' });
 defvar('agent-steer-presets', {
   concise: { label: 'Concise', prompt: 'Be extremely concise in your responses. Provide only essential information.' },
   verbose: { label: 'Verbose', prompt: 'Be detailed and thorough in your explanations. Include examples and context.' },
@@ -137,7 +137,7 @@ function modelsFor(b) {
 
 /** Columns available in the window showing b (null if unknown / disabled). */
 function wrapWidth(b) {
-  const setting = getVarOr('agent-wrap-column', 'auto', b);
+  const setting = getVarOr('agent-wrap-column', 0, b);
   if (setting === 0 || setting === false) return null;
   if (typeof setting === 'number') return setting;
   const win = windowList().find((w) => w.buffer === b && w.bodyEl?.clientWidth) ?? windowList().find((w) => w.buffer === b);
@@ -504,6 +504,7 @@ export async function openAgent({ name = getVarOr('agent-default', 'claude-code'
   b.undoEnabled = true;
   b.locals.set('default-directory', cwd);
   b.locals.set('display-line-numbers', false);
+  b.locals.set('truncate-lines', false); // soft-wrap; reflows automatically on resize
   b.readOnlyBefore = new Marker(b, 0);
   b.agent = { 
     name, label, cwd, def, items: [], meta: [], busy: false, status: 'starting…', 
