@@ -152,7 +152,13 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
 .cursor-block { background: var(--fg); color: var(--bg); }
 .cursor-block.state-normal { background: var(--accent); }
 .cursor-block.state-visual { background: var(--accent-2); }
-.cursor-bar { color: transparent; border-left: 2px solid var(--green); background: transparent; }
+.cursor-bar { 
+  color: transparent; 
+  background: transparent; 
+  border-left: 2px solid var(--green);
+  width: 2px !important;
+}
+.cursor-bar.state-insert { border-left-color: var(--green); }
 .cursor-hollow { color: transparent; outline: 1px solid var(--fg-dim); outline-offset: -1px; }
 
 .window:not(.selected) .view-lines { opacity: 0.85; }
