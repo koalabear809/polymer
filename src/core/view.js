@@ -382,9 +382,8 @@ export function renderView(win, selected, point) {
   const contentW = hscroll ? gutterPx + (win.maxCols + 2) * cw : 0;
   body.style.overflowX = (hscroll && !wrapped) ? '' : 'hidden';
   
-  // When wrapping, we'll compute actual height after rendering; use estimate for now
-  const estimatedHeight = wrapped ? lineCount * lh * 1.5 : lineCount * lh;
-  win.spacerEl.style.height = `${estimatedHeight}px`;
+  // Spacer height (will be hidden when wrapping)
+  win.spacerEl.style.height = `${lineCount * lh}px`;
   win.spacerEl.style.width = `${contentW}px`;
   win.linesEl.style.minWidth = hscroll ? `max(${contentW}px, 100%)` : '100%';
   if ((!hscroll || wrapped) && body.scrollLeft) setScroll(win, undefined, 0);
@@ -421,8 +420,17 @@ export function renderView(win, selected, point) {
   win.userScrolled = false;
 
   // Visible line range.
-  const first = Math.max(0, Math.floor(body.scrollTop / lh) - 2);
-  const last = Math.min(lineCount - 1, Math.ceil((body.scrollTop + viewH) / lh) + 2);
+  let first, last;
+  if (wrapped) {
+    // When wrapping, render all lines to avoid positioning issues
+    // For large buffers, this may need optimization, but it's simpler and correct
+    first = 0;
+    last = lineCount - 1;
+  } else {
+    first = Math.max(0, Math.floor(body.scrollTop / lh) - 2);
+    last = Math.min(lineCount - 1, Math.ceil((body.scrollTop + viewH) / lh) + 2);
+  }
+  
   const hl = selected && getVarOr('global-hl-line-mode', true, buf);
   const key = `${epoch}|${buf.version}|${first}|${last}|${hl ? pos.line : -1}|${numbers === 'relative' ? pos.line : ''}|${gutterChars}|${tabWidth}|${wrapped}`;
   if (key !== win.renderKey || win.renderedBuffer !== buf) {
@@ -438,26 +446,13 @@ export function renderView(win, selected, point) {
     
     // Position based on whether we're wrapping
     if (wrapped) {
-      // For wrapped lines, we need to compute cumulative heights
-      // For simplicity, position at estimated location and let browser handle
-      win.linesEl.style.transform = `translateY(${first * lh}px)`;
+      // For wrapped lines, don't use transform - render all and let browser handle positioning
+      win.linesEl.style.transform = '';
       
-      // After render, measure actual heights and update spacer
-      requestAnimationFrame(() => {
-        if (!win.linesEl || win.renderKey !== key) return;
-        let totalHeight = 0;
-        for (let i = 0; i < lineCount; i++) {
-          const lineEl = win.lineEls.get(i);
-          if (lineEl) {
-            totalHeight += lineEl.offsetHeight;
-          } else {
-            // Lines not rendered yet; estimate
-            totalHeight += lh;
-          }
-        }
-        win.spacerEl.style.height = `${Math.max(totalHeight, viewH)}px`;
-      });
+      // Hide the spacer when wrapping (content provides its own height)
+      win.spacerEl.style.display = 'none';
     } else {
+      win.spacerEl.style.display = '';
       win.linesEl.style.transform = `translateY(${first * lh}px)`;
     }
     win.renderKey = key;
