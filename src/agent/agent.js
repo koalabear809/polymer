@@ -158,6 +158,8 @@ function render(b) {
         const icon = PLAN_ICON[e.status] ?? '○';
         push(`    ${icon} ${e.content}`, { decos: [{ from: 4, to: 5, face: `agent-status-${e.status}` }, ...(e.status === 'completed' ? [{ from: 6, to: 6 + e.content.length, face: 'agent-done' }] : [])], item });
       }
+    } else if (item.type === 'command-output') {
+      indentAll(item.text, '', 'agent-output', item);
     } else if (item.type === 'info' || item.type === 'error') {
       indentAll(item.text, '', item.type === 'error' ? 'agent-error' : 'agent-info', item);
     }
@@ -342,7 +344,11 @@ async function startSession(b) {
   const client = new AcpClient({ ...a.def, cwd: a.cwd }, {
     onUpdate: (p) => onUpdate(b, p),
     requestPermission: (p) => requestPermission(b, p),
-    onStderr: (text) => { stderr.undoEnabled = false; stderr.append(text); },
+    onStderr: (text) => {
+      stderr.undoEnabled = false;
+      stderr.append(text);
+      if (a.turn) a.turn.stderr += text; // local command output arrives here (see finishTurn)
+    },
     onExit: (code) => {
       a.dead = true;
       a.busy = false;
@@ -402,6 +408,38 @@ async function promptBlocks(text, cwd) {
   return blocks;
 }
 
+/** Output blocks of locally run commands found in agent stderr: [{ stream, text }]. */
+const localOutputs = (s) => [...s.matchAll(/<local-command-(stdout|stderr)>([\s\S]*?)<\/local-command-\1>/g)]
+  .map((m) => ({ stream: m[1], text: m[2].replace(/\x1b\[[0-9;]*m/g, '').trim() }))
+  .filter((o) => o.text);
+
+/**
+ * End of a turn. Claude Code runs some slash commands (/usage, /cost, /status, ...)
+ * locally, and its ACP adapter only logs their output to stderr; show it here. A turn
+ * that produced nothing at all says so instead of ending silently.
+ */
+async function finishTurn(b) {
+  const a = b.agent;
+  const t = a.turn;
+  if (!t) return;
+  const produced = () => a.items.slice(t.start).some((i) => i.type !== 'info');
+  // stderr and the turn's reply travel on different pipes; give stderr a moment.
+  if (!produced() && !localOutputs(t.stderr).length) await new Promise((r) => setTimeout(r, 150));
+  if (!produced()) {
+    for (const o of localOutputs(t.stderr)) a.items.push({ type: o.stream === 'stderr' ? 'error' : 'command-output', text: o.text });
+  }
+  if (!produced()) {
+    const cmd = /^\/(\S+)/.exec(t.text)?.[1];
+    const known = (a.commands ?? []).some((c) => c.name === cmd);
+    a.items.push({
+      type: 'info',
+      text: cmd && !known && a.commands?.length
+        ? `[no response: /${cmd} isn't one of ${a.label}'s available commands here; C-c / lists them]`
+        : '[no response]',
+    });
+  }
+}
+
 /** Send a message (default: the input after the prompt). */
 export async function agentSend(b, text) {
   const a = b.agent;
@@ -415,15 +453,18 @@ export async function agentSend(b, text) {
   b.deleteText(inputStart, b.length, { undo: false });
   a.items.push({ type: 'user', text });
   a.busy = true;
+  a.turn = { text, stderr: '', start: a.items.length };
   redraw(b);
   scheduleTranscriptSave(b);
   b.point.set(b.length);
   try {
     const res = await a.client.prompt(a.sessionId, await promptBlocks(text, a.cwd));
+    await finishTurn(b);
     if (res?.stopReason && res.stopReason !== 'end_turn') a.items.push({ type: 'info', text: `[stopped: ${res.stopReason.replace(/_/g, ' ')}]` });
   } catch (e) {
     a.items.push({ type: 'error', text: `Error: ${e.message ?? e}` });
   } finally {
+    a.turn = null;
     a.busy = false;
     scheduleRedraw(b);
     saveTranscript(b).catch((e) => message('Could not save transcript: %s', e.message ?? e));
@@ -611,6 +652,8 @@ export function transcriptMarkdown(b) {
       }
     } else if (item.type === 'plan') {
       out.push('### Plan', '', ...item.entries.map((e) => `- [${e.status === 'completed' ? 'x' : ' '}] ${e.content}${e.status === 'in_progress' ? ' _(in progress)_' : ''}`), '');
+    } else if (item.type === 'command-output') {
+      out.push(fence(item.text), '');
     } else if (item.type === 'info' || item.type === 'error') {
       out.push(`_${item.text}_`, '');
     }
