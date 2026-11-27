@@ -518,18 +518,9 @@ function redraw(b) {
   if (inInput) b.point.set(b.length - fromEnd);
   else if (before) b.point.set(b.offsetAt(before.line, before.col));
   
-  // Update header line in all windows showing this buffer
-  for (const win of windowList()) {
-    if (win.buffer === b && win.headerLineEl) {
-      if (headerLine) {
-        win.headerLineEl.textContent = headerLine;
-        win.headerLineEl.style.display = '';
-      } else {
-        win.headerLineEl.style.display = 'none';
-      }
-    }
-  }
-  
+  // Window redisplay shows it in whichever windows display this buffer.
+  b.headerLine = headerLine;
+
   b.touch();
 }
 

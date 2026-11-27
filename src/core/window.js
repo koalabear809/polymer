@@ -581,6 +581,8 @@ function renderModeLine(win) {
 function renderWindow(win) {
   const buf = win.buffer;
   const isSel = win === selected;
+  // Before the body, so the body is measured with the header already shown or hidden.
+  renderHeaderLine(win);
   // The selected window shows (and owns) the buffer's point.
   const point = isSel ? buf.point.pos : win.point.pos;
   const newPoint = renderView(win, isSel, point);
@@ -592,6 +594,19 @@ function renderWindow(win) {
   }
   win.el.classList.toggle('selected', isSel);
   renderModeLine(win);
+}
+
+/** A buffer that wants a header line sets `buffer.headerLine` (a string); others get none. */
+function renderHeaderLine(win) {
+  const el = win.headerLineEl;
+  if (!el) return;
+  const text = win.buffer?.headerLine;
+  if (text) {
+    if (el.textContent !== text) el.textContent = text;
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+  }
 }
 
 function redisplayWindows() {
