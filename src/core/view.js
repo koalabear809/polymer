@@ -17,6 +17,7 @@ defvar('global-hl-line-mode', true, { doc: 'Highlight the cursor line in the sel
 defvar('tab-width', 4, { doc: 'Display width of a tab character, in columns.' });
 defvar('auto-hscroll-mode', true, { doc: 'When true, windows scroll sideways to keep the cursor visible. Terminals turn it off: they always fit the window.' });
 defvar('cursor-in-non-selected-windows', true, { doc: 'Show a hollow cursor in windows that are not selected.' });
+defvar('truncate-lines', true, { doc: 'When false, long lines wrap at the window edge. When true (default), lines extend horizontally and require scrolling.' });
 
 let metrics = null;
 let epoch = 0;                 // bumped to force all windows to re-render their lines
@@ -186,9 +187,10 @@ function renderLineText(text, decos, virtual) {
   return lt;
 }
 
-function renderLine(buf, line, { gutterChars, gutterPx, numbers, pointLine, hl }) {
+function renderLine(buf, line, { gutterChars, gutterPx, numbers, pointLine, hl, wrapped }) {
   const el = document.createElement('div');
   el.className = 'line';
+  if (wrapped) el.classList.add('wrapped');
   const text = buf.lineText(line);
   const start = buf.lineStart(line);
   const { decos, virtual, lineFaces } = lineDecorations(buf, line, start, text);
@@ -366,6 +368,7 @@ export function renderView(win, selected, point) {
   const numbers = getVarOr('display-line-numbers', 'relative', buf);
   const gutterChars = gutterWidthChars(buf);
   const gutterPx = gutterPixels(buf);
+  const wrapped = !getVarOr('truncate-lines', true, buf);
   body.style.setProperty('--tab-width', tabWidth);
 
   // Content size (recomputed only when the text changes).
@@ -375,13 +378,16 @@ export function renderView(win, selected, point) {
     win.maxColsKey = sizeKey;
     win.maxColsBuffer = buf;
   }
-  const hscroll = getVarOr('auto-hscroll-mode', true, buf);
+  const hscroll = !wrapped && getVarOr('auto-hscroll-mode', true, buf);
   const contentW = hscroll ? gutterPx + (win.maxCols + 2) * cw : 0;
-  body.style.overflowX = hscroll ? '' : 'hidden';
-  win.spacerEl.style.height = `${lineCount * lh}px`;
+  body.style.overflowX = (hscroll && !wrapped) ? '' : 'hidden';
+  
+  // When wrapping, we'll compute actual height after rendering; use estimate for now
+  const estimatedHeight = wrapped ? lineCount * lh * 1.5 : lineCount * lh;
+  win.spacerEl.style.height = `${estimatedHeight}px`;
   win.spacerEl.style.width = `${contentW}px`;
   win.linesEl.style.minWidth = hscroll ? `max(${contentW}px, 100%)` : '100%';
-  if (!hscroll && body.scrollLeft) setScroll(win, undefined, 0);
+  if ((!hscroll || wrapped) && body.scrollLeft) setScroll(win, undefined, 0);
 
   const viewH = body.clientHeight;
   const visibleLines = Math.max(1, Math.floor(viewH / lh));
@@ -418,9 +424,9 @@ export function renderView(win, selected, point) {
   const first = Math.max(0, Math.floor(body.scrollTop / lh) - 2);
   const last = Math.min(lineCount - 1, Math.ceil((body.scrollTop + viewH) / lh) + 2);
   const hl = selected && getVarOr('global-hl-line-mode', true, buf);
-  const key = `${epoch}|${buf.version}|${first}|${last}|${hl ? pos.line : -1}|${numbers === 'relative' ? pos.line : ''}|${gutterChars}|${tabWidth}`;
+  const key = `${epoch}|${buf.version}|${first}|${last}|${hl ? pos.line : -1}|${numbers === 'relative' ? pos.line : ''}|${gutterChars}|${tabWidth}|${wrapped}`;
   if (key !== win.renderKey || win.renderedBuffer !== buf) {
-    const opts = { gutterChars, gutterPx, numbers, pointLine: pos.line, hl };
+    const opts = { gutterChars, gutterPx, numbers, pointLine: pos.line, hl, wrapped };
     const els = [];
     win.lineEls = new Map();
     for (let i = first; i <= last; i++) {
@@ -429,7 +435,31 @@ export function renderView(win, selected, point) {
       els.push(el);
     }
     win.linesEl.replaceChildren(...els);
-    win.linesEl.style.transform = `translateY(${first * lh}px)`;
+    
+    // Position based on whether we're wrapping
+    if (wrapped) {
+      // For wrapped lines, we need to compute cumulative heights
+      // For simplicity, position at estimated location and let browser handle
+      win.linesEl.style.transform = `translateY(${first * lh}px)`;
+      
+      // After render, measure actual heights and update spacer
+      requestAnimationFrame(() => {
+        if (!win.linesEl || win.renderKey !== key) return;
+        let totalHeight = 0;
+        for (let i = 0; i < lineCount; i++) {
+          const lineEl = win.lineEls.get(i);
+          if (lineEl) {
+            totalHeight += lineEl.offsetHeight;
+          } else {
+            // Lines not rendered yet; estimate
+            totalHeight += lh;
+          }
+        }
+        win.spacerEl.style.height = `${Math.max(totalHeight, viewH)}px`;
+      });
+    } else {
+      win.linesEl.style.transform = `translateY(${first * lh}px)`;
+    }
     win.renderKey = key;
   }
 

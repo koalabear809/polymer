@@ -83,6 +83,7 @@ defineKey({ keymaps: 'global', states: ['normal', 'visual'], prefix: 'SPC' }, {
   't': { label: 'toggles' },
   't d': 'toggle-debug-on-error',
   't t': 'load-theme',
+  't w': 'toggle-truncate-lines',
 
   'q': { label: 'quit/reload' },
   'q r': 'reload-polymer',

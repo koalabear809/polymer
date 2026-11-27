@@ -99,6 +99,18 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
 }
 .line.hl-line, .line.hl-line .gutter { background: var(--bg-alt); }
 
+/* Wrapped lines */
+.line.wrapped {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  height: auto;
+}
+.line.wrapped-continuation .gutter {
+  /* Hide line number on continuation lines */
+  color: transparent;
+}
+
 .gutter {
   display: inline-block;
   position: sticky;

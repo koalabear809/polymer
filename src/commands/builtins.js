@@ -272,6 +272,13 @@ defcommand('toggle-debug-on-error', { doc: 'Toggle logging full stack traces for
   message('debug-on-error %s', v ? 'enabled' : 'disabled');
 });
 
+defcommand('toggle-truncate-lines', { doc: 'Toggle line wrapping in the current buffer.' }, () => {
+  const b = currentBuffer();
+  const v = !getVarOr('truncate-lines', true, b);
+  setq('truncate-lines', v, b);
+  message('Line wrapping %s', v ? 'disabled (truncated)' : 'enabled');
+});
+
 defcommand('polymer-version', { doc: 'Show the Polymer version and platform.' }, async () => {
   const i = await appInfo();
   message('Polymer %s on %s (config: %s). SPC h u checks for updates.', i.version, i.platform, i.configDir ?? 'n/a');
