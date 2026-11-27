@@ -21,6 +21,7 @@ defineKey({ keymaps: 'global', states: ['normal', 'visual'], prefix: 'SPC' }, {
   'f': { label: 'files' },
   'f f': 'find-file',
   'f s': 'save-buffer',
+  'f t': 'toggle-filetree',
   'f S': 'write-file',
   'f r': 'recentf-open-files',
   'f y': 'copy-file-path',

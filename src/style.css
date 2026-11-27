@@ -163,6 +163,12 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
 
 .window:not(.selected) .view-lines { opacity: 0.85; }
 
+/* File tree buffer faces */
+.filetree-header { color: var(--accent); font-weight: bold; }
+.filetree-directory { color: var(--accent); }
+.filetree-file { color: var(--fg); }
+.filetree-marker { color: var(--fg-dim); }
+
 /* Hidden input element; follows the cursor and shows IME pre-edit text while composing. */
 #input {
   position: absolute;
@@ -464,3 +470,68 @@ body.helm-active #echo { display: none; }
 }
 .image-stage img { position: absolute; left: 50%; top: 50%; transform-origin: center; user-select: none; }
 .image-error { margin: auto; padding: 24px; color: var(--error); }
+
+/* ---- sidebars ---- */
+
+.sidebar {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  background: var(--bg-alt);
+  border-right: 1px solid var(--border);
+  overflow: auto;
+  z-index: 10;
+  box-shadow: 2px 0 4px rgba(0, 0, 0, 0.3);
+}
+
+.sidebar-left {
+  left: 0;
+  border-right: 1px solid var(--border);
+}
+
+.sidebar-right {
+  right: 0;
+  border-left: 1px solid var(--border);
+  border-right: none;
+  box-shadow: -2px 0 4px rgba(0, 0, 0, 0.3);
+}
+
+.sidebar::-webkit-scrollbar { width: 8px; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--bg-hl); border-radius: 4px; }
+.sidebar::-webkit-scrollbar-corner { background: transparent; }
+
+/* ---- file tree ---- */
+
+.filetree-header {
+  color: var(--accent);
+  font-weight: bold;
+  position: sticky;
+  top: 0;
+  background: var(--bg-alt);
+  z-index: 1;
+}
+
+.filetree-tree {
+  font-size: var(--font-size);
+  line-height: calc(var(--font-size) * var(--line-height));
+}
+
+.filetree-node {
+  white-space: nowrap;
+  user-select: none;
+}
+
+.filetree-marker {
+  color: var(--fg-dim);
+  display: inline-block;
+  width: 1em;
+}
+
+.filetree-directory {
+  color: var(--accent);
+  font-weight: bold;
+}
+
+.filetree-file {
+  color: var(--fg);
+}
