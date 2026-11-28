@@ -39,7 +39,7 @@ defvar('agent-env-remove', [
   doc: 'Environment variables removed from agent processes. Claude Code refuses to start when it sees it is inside another Claude Code session (CLAUDECODE), which happens if Polymer itself was launched from one.',
 });
 defvar('agent-mcp-servers', [], { doc: 'Extra MCP servers given to new agent sessions ([{ type: "http", name, url, headers }]).' });
-defvar('agent-tool-output-lines', 12, { doc: 'Lines of tool output (diffs, terminal output) shown per tool call.' });
+defvar('agent-tool-output-lines', 40, { doc: 'Lines of details (command output, diffs, ...) shown in an expanded tool call.' });
 defvar('agent-save-transcripts', true, { doc: 'Save each conversation as Markdown in agent-transcript-directory under the agent\'s directory.' });
 defvar('agent-transcript-directory', '.polymer/agent/', { doc: 'Where transcripts go, relative to the agent buffer\'s directory.' });
 defvar('agent-transcript-save-delay', 2000, { doc: 'Milliseconds of quiet before a transcript is saved (it is also saved at the end of each turn).' });
@@ -55,9 +55,10 @@ defvar('agent-steer-presets', {
   debugging: { label: 'Debugging', prompt: 'Focus on debugging and problem-solving. Analyze issues methodically.' },
   code: { label: 'Code-focused', prompt: 'Focus on writing clean, well-documented code. Prioritize code quality.' },
 }, { doc: 'Preset steering prompts. Keys are preset IDs, values are { label, prompt }.' });
-defvar('agent-thoughts-collapsed', false, { doc: 'Show thinking sections collapsed to one line by default (TAB on one toggles it; S-TAB toggles all).' });
+defvar('agent-thoughts-collapsed', true, { doc: 'Show thinking sections collapsed to their "Thinking" line by default (TAB on one toggles it; S-TAB toggles all sections).' });
+defvar('agent-tools-collapsed', true, { doc: 'Show tool calls (commands, searches, reads, edits, ...) collapsed to their header line by default (TAB on one shows its details; S-TAB toggles all sections).' });
 defvar('agent-show-banner', true, { doc: 'Show the session header line at the top of agent windows (its contents: agent-header-fields).' });
-defvar('agent-blank-line-height', 0.6, { doc: 'Height of blank lines between parts of the conversation, as a fraction of a line (1 = a full line).' });
+defvar('agent-blank-line-height', 1, { doc: 'Height of blank lines between parts of the conversation, as a fraction of a line (1, the default, keeps every line the same height).' });
 defvar('agent-header-fields', ['model', 'effort', 'tokens', 'cost'], {
   doc: 'What the agent header line shows, in order. Fields: "model", "effort", "mode" (e.g. plan), "tokens" (input/output this session), "context" (tokens in the context window / its size), "cost" (the session\'s total, as the agent reports it).',
 });
@@ -69,6 +70,35 @@ defvar('agent-token-costs', {
 
 const userError = (msg) => new PolymerError('user-error', msg);
 const PROMPT = '❯ ';
+const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPINNER_MS = 100;
+/**
+ * Display-only text before the input's first line: the prompt, with a spinner in front
+ * while the agent works. The spinner sits in a fixed-width box (.agent-spinner), so a
+ * glyph drawn from a fallback font can't shift the prompt from frame to frame.
+ */
+function promptDecos(a) {
+  const prompt = { before: PROMPT, face: 'agent-prompt', priority: 1 };
+  if (!a?.busy) return [prompt];
+  return [{ before: SPINNER[Math.floor(performance.now() / SPINNER_MS) % SPINNER.length], face: 'agent-spinner', priority: 0 }, prompt];
+}
+/** Columns the prompt takes, for the indent of the input's other lines. */
+const promptWidth = (a) => PROMPT.length + (a?.busy ? SPINNER_COLUMNS : 0);
+const SPINNER_COLUMNS = 2; // .agent-spinner's width in style.css
+
+/** Thinking sections and tool calls fold under a one-line header (TAB toggles them). */
+const isCommand = (item) => item?.type === 'tool' && item.kind === 'execute';
+const isFoldable = (item) => item?.type === 'thought' || item?.type === 'tool';
+function isCollapsed(b, item) {
+  if (item.collapsed !== undefined) return item.collapsed;
+  return getVarOr(item.type === 'thought' ? 'agent-thoughts-collapsed' : 'agent-tools-collapsed', true, b);
+}
+
+/** Text without the Markdown code fence agents wrap tool output in. */
+function unfence(text) {
+  const m = text.match(/^\s*(`{3,})[^\n`]*\n([\s\S]*?)\n?\1\s*$/);
+  return m ? m[2] : text;
+}
 
 /** Lines of text with leading/trailing blank lines dropped and runs of blank lines collapsed to one. */
 function tidyLines(text) {
@@ -324,6 +354,40 @@ function assistantMarkdown(b, item, columns) {
   return lines;
 }
 
+const TOOL_LABEL = { execute: 'Command', search: 'Search', read: 'Read', edit: 'Edit', delete: 'Delete', move: 'Move', fetch: 'Fetch', think: 'Think', other: 'Tool' };
+
+/**
+ * The lines of a tool call's expanded section, [{ text, face, prompt?, images? }]: for a
+ * command, the command itself and then its output; for any tool, its text (without the
+ * Markdown fence agents wrap it in), diffs and terminal output.
+ */
+function toolBody(a, item) {
+  const rows = [];
+  const add = (text, face) => { for (const l of text.replace(/\s+$/, '').split('\n')) rows.push({ text: l, face }); };
+  if (isCommand(item)) {
+    const command = String(item.rawInput?.command ?? item.title ?? '').replace(/\s+$/, '');
+    command.split('\n').forEach((l, k) => rows.push({ text: k ? `  ${l}` : `$ ${l}`, face: 'agent-command', prompt: !k }));
+  }
+  for (const c of item.content ?? []) {
+    if (c.type === 'content' && c.content?.type === 'image' && c.content.data) {
+      rows.push({ text: '[image]', face: 'agent-output', images: [{ src: imageUrl(a, c.content), alt: 'image' }] });
+    } else if (c.type === 'content') {
+      const text = unfence(blockText(c.content));
+      if (text.trim()) add(text, 'agent-output');
+    } else if (c.type === 'diff') {
+      if (c.path) rows.push({ text: abbreviateFileName(c.path), face: 'agent-dim' });
+      for (const l of diffLines(c.oldText, c.newText)) rows.push({ text: l, face: l[0] === '+' ? 'git-diff-add' : l[0] === '-' ? 'git-diff-del' : 'agent-dim' });
+    } else if (c.type === 'terminal') {
+      const t = a.client?.terminals.get(c.terminalId);
+      if (!t) continue;
+      if (!isCommand(item)) rows.push({ text: `$ ${t.command}`, face: 'agent-command', prompt: true });
+      if (t.output.trim()) add(t.output, 'agent-output');
+      if (t.exit) rows.push({ text: `[exit ${t.exit.exitCode ?? t.exit.signal}]`, face: 'agent-dim' });
+    }
+  }
+  return rows;
+}
+
 function render(b) {
   const a = b.agent;
   const wrapAt = wrapWidth(b);
@@ -343,7 +407,7 @@ function render(b) {
       meta.push(m);
     });
   };
-  const maxOut = getVarOr('agent-tool-output-lines', 12, b);
+  const maxOut = getVarOr('agent-tool-output-lines', 40, b);
   const indentAll = (text, prefix, face, item) => {
     for (const l of tidyLines(text)) push(l ? `${prefix}${l}` : prefix.trimEnd(), { lineFace: face, item });
   };
@@ -395,7 +459,7 @@ function render(b) {
       const thoughtLevel = getVarOr('agent-thought-level', 'full', b);
       if (thoughtLevel !== 'none') {
         const all = tidyLines(item.text);
-        const collapsed = item.collapsed ?? getVarOr('agent-thoughts-collapsed', false, b);
+        const collapsed = isCollapsed(b, item);
         const count = all.length === 1 ? '' : ` (${all.length} lines)`;
         const preview = collapsed ? `  ${all.find((l) => l)?.slice(0, 70) ?? ''}${all[0].length > 70 ? '…' : ''}` : '';
         const head = `${collapsed ? '▸' : '▾'} Thinking${count}`;
@@ -413,28 +477,48 @@ function render(b) {
         }
       }
     } else if (item.type === 'tool') {
+      // Each tool call is a section: a header line, and its details when expanded.
+      //   ▸ Command  ✓ ls -la            (a command shows its first line collapsed,
+      //   ▾ Command  ✓ List the files     its description expanded)
+      //   │ $ ls -la
+      //   │ total 8 ...
       const icon = STATUS_ICON[item.status] ?? '•';
-      const where = item.locations?.[0]?.path ? `  ${abbreviateFileName(item.locations[0].path)}${item.locations[0].line ? `:${item.locations[0].line}` : ''}` : '';
-      const text = `  ${icon} ${item.title ?? item.kind ?? 'tool'}`;
-      push(`${text}${where}`, { decos: [{ from: 2, to: 3, face: `agent-status-${item.status}` }, { from: 4, to: text.length, face: 'agent-tool' }, { from: text.length, to: text.length + where.length, face: 'agent-dim' }], item });
-      for (const c of item.content ?? []) {
-        if (c.type === 'content' && c.content?.type === 'image' && c.content.data) {
-          push('    [image]', { lineFace: 'agent-output', item, images: [{ src: imageUrl(a, c.content), alt: 'image' }] });
-          continue;
-        }
-        let out = [];
-        if (c.type === 'diff') out = diffLines(c.oldText, c.newText);
-        else if (c.type === 'content') out = blockText(c.content).split('\n');
-        else if (c.type === 'terminal') {
-          const t = a.client?.terminals.get(c.terminalId);
-          out = t ? [`$ ${t.command}`, ...t.output.replace(/\n+$/, '').split('\n')] : [];
-          if (t?.exit) out.push(`[exit ${t.exit.exitCode ?? t.exit.signal}]`);
-        }
-        if (!out.length || (out.length === 1 && !out[0])) continue;
-        const shown = out.length > maxOut ? [...out.slice(0, maxOut), `… ${out.length - maxOut} more lines`] : out;
-        for (const l of shown) {
-          const face = c.type === 'diff' ? (l[0] === '+' ? 'git-diff-add' : l[0] === '-' ? 'git-diff-del' : 'agent-dim') : 'agent-output';
-          push(`    ${l}`, { lineFace: face, item });
+      const label = TOOL_LABEL[item.kind] ?? 'Tool';
+      const body = toolBody(a, item);
+      const collapsed = isCollapsed(b, item);
+      let summary;
+      if (isCommand(item)) {
+        const first = String(item.rawInput?.command ?? item.title ?? '').split('\n')[0];
+        summary = collapsed ? first : (item.rawInput?.description || first);
+      } else {
+        summary = String(item.title ?? item.kind ?? '').split('\n')[0];
+        if (summary.toLowerCase().startsWith(`${label.toLowerCase()} `)) summary = summary.slice(label.length + 1);
+        const loc = item.locations?.[0];
+        const file = loc?.path?.split(/[\\/]/).pop();
+        if (file && !summary.includes(file)) summary += `  ${abbreviateFileName(loc.path)}${loc.line ? `:${loc.line}` : ''}`;
+      }
+      if (summary.length > 100) summary = `${summary.slice(0, 99)}…`;
+      const head = `${body.length ? (collapsed ? '▸' : '▾') : ' '} ${label.padEnd(7)}  `;
+      const line = `${head}${icon}${summary ? ` ${summary}` : ''}`;
+      push(line, {
+        item,
+        decos: [
+          { from: 0, to: 1, face: 'agent-fold' },
+          { from: 2, to: 2 + label.length, face: 'agent-tool' },
+          { from: head.length, to: head.length + 1, face: `agent-status-${item.status}` },
+          { from: head.length + 1, to: line.length, face: collapsed || !isCommand(item) ? 'agent-command' : 'agent-dim' },
+        ],
+      });
+      if (!collapsed && body.length) {
+        const bar = { from: 0, to: 1, face: 'agent-dim' };
+        const shown = body.length > maxOut ? [...body.slice(0, maxOut), { text: `… ${body.length - maxOut} more lines`, face: 'agent-dim' }] : body;
+        for (const r of shown) {
+          push(r.text ? `│ ${r.text}` : '│', {
+            lineFace: r.face,
+            item,
+            decos: [bar, ...(r.prompt ? [{ from: 2, to: 3, face: 'agent-prompt' }] : [])],
+            ...(r.images ? { images: r.images } : {}),
+          });
         }
       }
     } else if (item.type === 'plan') {
@@ -450,9 +534,9 @@ function render(b) {
     }
   }
   push('');
-  const status = a.busy || a.promptQueue.length > 0;
-  if (a.busy) push(`· ${a.label} is working…  (C-c C-k to cancel)`, { lineFace: 'agent-info' });
-  if (a.promptQueue.length > 0) {
+  // While the agent works, a spinner shows by the input's prompt (see promptDecos).
+  const status = a.promptQueue.length > 0;
+  if (status) {
     push(`· Queue: ${a.promptQueue.length} prompt${a.promptQueue.length === 1 ? '' : 's'} waiting  (C-c q to view/clear)`, { lineFace: 'agent-info' });
   }
   if (a.attachments.length) {
@@ -498,7 +582,7 @@ function redraw(b) {
   const a = b.agent;
   if (!a || !b.live) return;
   const { transcript, meta, headerLine } = render(b);
-  document.documentElement.style.setProperty('--agent-gap', String(getVarOr('agent-blank-line-height', 0.6, b)));
+  document.documentElement.style.setProperty('--agent-gap', String(getVarOr('agent-blank-line-height', 1, b)));
   const inputStart = b.readOnlyBefore.pos;
   const old = b.getText(0, inputStart);
   let i = 0;
@@ -522,6 +606,20 @@ function redraw(b) {
   b.headerLine = headerLine;
 
   b.touch();
+  updateSpinner(b);
+}
+
+/** While the agent is busy, redisplay the buffer every frame of the prompt's spinner. */
+function updateSpinner(b) {
+  const a = b.agent;
+  if (a.busy && !a.spinnerTimer) {
+    a.spinnerTimer = setInterval(() => {
+      if (b.agent === a && a.busy && b.live) { b.touch(); return; }
+      clearInterval(a.spinnerTimer);
+      a.spinnerTimer = null;
+      if (b.live) b.touch(); // back to the plain prompt
+    }, SPINNER_MS);
+  }
 }
 
 // Re-wrap when the window changes size.
@@ -668,7 +766,7 @@ export async function openAgent({ name = getVarOr('agent-default', 'claude-code'
   b.decorators.push((buf, line) => {
     // Input lines: the prompt (and an indent on continuation lines) is display-only text.
     const inputLine = buf.lineAt(buf.readOnlyBefore.pos);
-    if (line >= inputLine) return [line === inputLine ? { before: PROMPT, face: 'agent-prompt' } : { before: ' '.repeat(PROMPT.length) }];
+    if (line >= inputLine) return line === inputLine ? promptDecos(buf.agent) : [{ before: ' '.repeat(promptWidth(buf.agent)) }];
     const m = buf.agent?.meta?.[line];
     if (!m) return [];
     if (!m.lineFace && !m.images && buf.lineText(line) === '') return [{ lineFace: 'agent-gap' }]; // a shorter blank line
@@ -1112,12 +1210,14 @@ defcommand('agent-return', { doc: 'RET: send when in the input; on a tool line, 
     if (loc.line) fb.point.set(fb.offsetAt(loc.line - 1, 0));
     return;
   }
+  if (isFoldable(item)) return call('agent-toggle-thought'); // a tool call without a file
   b.point.set(b.length);
 });
 
-function thoughtAtPoint(b) {
+/** The thinking or command section at point, if any. */
+function foldAtPoint(b) {
   const item = b.agent.meta[b.lineAt()]?.item;
-  return item?.type === 'thought' ? item : null;
+  return isFoldable(item) ? item : null;
 }
 
 /** Redraw and put point on the item's first line (its body may have just disappeared). */
@@ -1127,43 +1227,42 @@ function redrawAt(b, item) {
   if (line >= 0) b.point.set(b.offsetAt(line, 0));
 }
 
-defcommand('agent-toggle-thought', { doc: 'Expand or collapse the thinking section at point (TAB).' }, () => {
+defcommand('agent-toggle-thought', { doc: 'Expand or collapse the thinking or command section at point (TAB).' }, () => {
   const b = requireAgent();
-  const item = thoughtAtPoint(b);
-  if (!item) { message('No thinking section here (move onto one, or S-TAB for all)'); return; }
-  toggleThought(b, item);
+  const item = foldAtPoint(b);
+  if (!item) { message('No thinking or command section here (move onto one, or S-TAB for all)'); return; }
+  toggleFold(b, item);
 });
 
-function toggleThought(b, item) {
-  item.collapsed = !(item.collapsed ?? getVarOr('agent-thoughts-collapsed', false, b));
+function toggleFold(b, item) {
+  item.collapsed = !isCollapsed(b, item);
   redrawAt(b, item);
 }
 
-defcommand('agent-tab', { doc: 'TAB: toggle the thinking section at point when point is in the transcript; indent in the input.' }, () => {
+defcommand('agent-tab', { doc: 'TAB: toggle the thinking or command section at point when point is in the transcript; indent in the input.' }, () => {
   const b = requireAgent();
   if (b.point.pos < b.readOnlyBefore.pos) return call('agent-toggle-thought');
   return call('indent-for-tab-command');
 });
 
-// Clicking the ▾/▸ marker of a thinking section toggles it.
+// Clicking the ▾/▸ marker of a thinking or command section toggles it.
 addHook('mouse-set-point-hook', function agentClickFold(win, off) {
   const b = win.buffer;
   if (!b?.agent || off >= b.readOnlyBefore.pos) return;
   const { line, col } = b.posAt(off);
   const m = b.agent.meta[line];
-  if (col > 1 || m?.item?.type !== 'thought' || b.agent.meta.findIndex((x) => x?.item === m.item) !== line) return;
-  toggleThought(b, m.item);
+  if (col > 1 || !isFoldable(m?.item) || b.agent.meta.findIndex((x) => x?.item === m.item) !== line) return;
+  toggleFold(b, m.item);
 });
 
-defcommand('agent-toggle-all-thoughts', { doc: 'Collapse all thinking sections, or expand them all if they are all collapsed (S-TAB).' }, () => {
+defcommand('agent-toggle-all-thoughts', { doc: 'Collapse all thinking and command sections, or expand them all if they are all collapsed (S-TAB).' }, () => {
   const b = requireAgent();
-  const thoughts = b.agent.items.filter((i) => i.type === 'thought');
-  if (!thoughts.length) return;
-  const dflt = getVarOr('agent-thoughts-collapsed', false, b);
-  const collapse = thoughts.some((t) => !(t.collapsed ?? dflt));
-  for (const t of thoughts) t.collapsed = collapse;
-  redrawAt(b, thoughtAtPoint(b) ?? thoughts.at(-1));
-  message(collapse ? 'Thinking collapsed' : 'Thinking expanded');
+  const folds = b.agent.items.filter(isFoldable);
+  if (!folds.length) return;
+  const collapse = folds.some((f) => !isCollapsed(b, f));
+  for (const f of folds) f.collapsed = collapse;
+  redrawAt(b, foldAtPoint(b) ?? folds.at(-1));
+  message(collapse ? 'Sections collapsed' : 'Sections expanded');
 });
 
 defcommand('agent-newline', { doc: 'Insert a newline in the input (S-RET, C-j).' }, () => {

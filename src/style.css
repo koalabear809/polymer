@@ -98,8 +98,13 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
 .view-lines.wrapped-mode { position: relative; transform: none !important; }
 
 .line {
-  height: calc(var(--font-size) * var(--line-height));
-  line-height: calc(var(--font-size) * var(--line-height));
+  /* One row, rounded to whole pixels: at 13px x 1.5 a row would be 19.5px, so rows would
+     start on half pixels and text would sit alternately 19 and 20px apart. (The plain
+     calc is the fallback where round() isn't supported.) */
+  --row: calc(var(--font-size) * var(--line-height));
+  --row: round(calc(var(--font-size) * var(--line-height)), 1px);
+  height: var(--row);
+  line-height: var(--row);
   white-space: pre;
   contain: layout style;
 }
@@ -112,12 +117,12 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
   overflow-wrap: break-word;
   height: auto;
   /* At least one row: an empty line has no content to give it height and would vanish. */
-  min-height: calc(var(--font-size) * var(--line-height));
+  min-height: var(--row);
   display: flex;
   /* Every wrapped line is in the DOM; the browser skips laying out and painting the ones
      off screen, using their last known height (a row until first shown). */
   content-visibility: auto;
-  contain-intrinsic-height: auto calc(var(--font-size) * var(--line-height));
+  contain-intrinsic-height: auto var(--row);
 }
 .line.wrapped .lt {
   flex: 1;
@@ -460,8 +465,9 @@ body.helm-active #echo { display: none; }
 .git-status-D { color: var(--error); }
 .git-status-R, .git-status-C { color: var(--accent); }
 .line.git-hunk-header, .line.git-hunk-header .gutter { background: var(--bg-hl); color: var(--accent); }
-.line.git-diff-add { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
-.line.git-diff-del { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
+/* Opaque for the same reason as .agent-codeline: no stripes where rows overlap. */
+.line.git-diff-add { background: color-mix(in srgb, var(--green) 14%, var(--bg)); color: var(--green); }
+.line.git-diff-del { background: color-mix(in srgb, var(--error) 14%, var(--bg)); color: var(--error); }
 .line.git-diff-file { color: var(--fg); font-weight: bold; }
 
 /* ---- agents ---- */
@@ -470,6 +476,8 @@ body.helm-active #echo { display: none; }
 .agent-dim, .line.agent-dim { color: var(--fg-dim); }
 .agent-user { color: var(--accent); font-weight: bold; }
 .agent-prompt { color: var(--accent); font-weight: bold; }
+/* The busy spinner before the prompt: a fixed 2-column box (SPINNER_COLUMNS in agent.js). */
+.agent-spinner { display: inline-block; width: 2ch; color: var(--accent); }
 .agent-tool { color: var(--fg-muted); }
 .agent-status-completed { color: var(--green); }
 .agent-status-in_progress { color: var(--yellow); }
@@ -477,10 +485,13 @@ body.helm-active #echo { display: none; }
 .agent-status-failed { color: var(--error); }
 .agent-done { color: var(--fg-dim); text-decoration: line-through; }
 .agent-code { color: var(--syn-string); }
-.line.agent-codeline { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+/* Opaque, not a translucent tint: rows are fractional pixels tall (19.5px at the default
+   size), so neighbouring rows can overlap by a pixel, and a translucent background drawn
+   twice there shows as a stripe every other line. */
+.line.agent-codeline { background: color-mix(in srgb, var(--fg) 6%, var(--bg)); }
 .line.agent-separator { color: var(--fg-dim); opacity: 0.6; }
 /* Blank lines between parts of an agent conversation (agent-blank-line-height). */
-.line.wrapped.agent-gap { min-height: calc(var(--font-size) * var(--line-height) * var(--agent-gap, 0.6)); }
+.line.wrapped.agent-gap { min-height: calc(var(--row) * var(--agent-gap, 1)); }
 .agent-fold { color: var(--accent); font-style: normal; }
 .agent-heading { color: var(--accent-2); font-weight: bold; }
 .agent-h1 { text-decoration: underline; text-underline-offset: 3px; }
@@ -495,6 +506,7 @@ body.helm-active #echo { display: none; }
 .agent-rule, .agent-table-border { color: var(--fg-dim); }
 .line.agent-thought { color: var(--fg-dim); font-style: italic; }
 .line.agent-output { color: var(--fg-muted); }
+.agent-command, .line.agent-command { color: var(--fg); }
 .line.agent-info { color: var(--fg-dim); }
 .line.agent-error { color: var(--error); }
 
