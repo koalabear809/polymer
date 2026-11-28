@@ -1,6 +1,6 @@
 [package]
 name = "polymer"
-version = "0.2.5"
+version = "0.2.6"
 description = "A buffer-centric, live-redefinable editing environment"
 edition = "2021"
 license = "MIT"
