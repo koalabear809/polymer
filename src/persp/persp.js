@@ -41,6 +41,7 @@ const userError = (msg) => new PolymerError('user-error', msg);
 // name -> { name, buffers: Set<Buffer>, config: window configuration | null }
 const perspectives = new Map();
 let current = null;
+let previous = null; // the perspective last switched away from (persp-switch offers it first)
 let switching = false;
 
 export const perspNames = () => [...perspectives.keys()];
@@ -105,6 +106,7 @@ export function perspSwitch(name) {
   const created = !perspectives.has(name);
   const target = perspectives.get(name) ?? make(name);
   const from = current;
+  previous = from;
   current = target;
   switching = true;
   try {
@@ -152,9 +154,12 @@ export async function perspKill(name, { killBuffers = true } = {}) {
   if (p === current) {
     const names = perspNames();
     const i = names.indexOf(name);
+    const before = previous;
     perspSwitch(names[i === 0 ? 1 : i - 1]);
+    previous = before === current ? null : before; // not the perspective being deleted
   }
   perspectives.delete(name);
+  if (previous === p) previous = null;
   if (killBuffers) {
     const { killBufferAsking } = await import('../commands/builtins.js');
     for (const b of p.buffers) {
@@ -382,10 +387,17 @@ addHook('kill-polymer-hook', async function perspSaveLastSession() {
 // ---------------------------------------------------------------------------
 // Commands
 
-const perspCandidates = () => perspNames().map((n, i) => {
-  const p = perspectives.get(n);
-  return { label: n, value: n, annotation: `${i < 9 ? `SPC TAB ${i + 1}  ` : ''}${p.buffers.size} buffer${p.buffers.size === 1 ? '' : 's'}${p === current ? '  current' : ''}` };
-});
+// The other perspectives, the previous one first; the SPC TAB numbers keep the real order.
+const perspCandidates = () => {
+  const names = perspNames();
+  const prev = previous && previous !== current && perspectives.get(previous.name) === previous ? previous.name : null;
+  const others = names.filter((n) => n !== current.name && n !== prev);
+  return (prev ? [prev, ...others] : others).map((n) => {
+    const p = perspectives.get(n);
+    const i = names.indexOf(n);
+    return { label: n, value: n, annotation: `${i < 9 ? `SPC TAB ${i + 1}  ` : ''}${p.buffers.size} buffer${p.buffers.size === 1 ? '' : 's'}${n === prev ? '  previous' : ''}` };
+  });
+};
 
 defcommand('persp-switch', { doc: 'Switch to a perspective, or create one by typing a new name.' }, () => {
   initPerspectives();
