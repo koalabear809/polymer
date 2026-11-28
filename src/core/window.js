@@ -9,7 +9,7 @@ import { majorModeInfo, minorModeInfo } from './modes.js';
 import { runHooks, getVarOr, defvar } from './registry.js';
 import { PolymerError } from './errors.js';
 import { Marker } from './marker.js';
-import { createView, renderView, offsetFromEvent, viewMetrics, visibleLineCount } from './view.js';
+import { createView, renderView, measureView, viewScrollInfo, offsetFromEvent, viewMetrics, visibleLineCount } from './view.js';
 import { focusInput } from './focus.js';
 
 defvar('mode-line-format', null, {
@@ -534,12 +534,13 @@ function defaultModeLine(win, buf) {
   const point = win === selected ? buf.point.pos : win.point.pos;
   const { line, col } = buf.posAt(point);
   const flag = buf.readOnly ? (buf.modified && buf.file ? '%*' : '%%') : (buf.modified ? '**' : '--');
-  const body = win.bodyEl;
+  // From the window's last render, so building the mode line doesn't measure the page.
+  const scroll = viewScrollInfo(win);
   let where = 'All';
-  if (body && body.scrollHeight > body.clientHeight + 1) {
-    if (body.scrollTop <= 0) where = 'Top';
-    else if (body.scrollTop + body.clientHeight >= body.scrollHeight - 1) where = 'Bot';
-    else where = `${Math.round((body.scrollTop / (body.scrollHeight - body.clientHeight)) * 100)}%`;
+  if (scroll && scroll.height > scroll.viewH + 1) {
+    if (scroll.top <= 0) where = 'Top';
+    else if (scroll.top + scroll.viewH >= scroll.height - 1) where = 'Bot';
+    else where = `${Math.round((scroll.top / (scroll.height - scroll.viewH)) * 100)}%`;
   }
   let state = buf.state;
   if (state === 'visual') state = { line: 'visual-line', block: 'visual-block' }[buf.vim?.visual?.type] ?? 'visual';
@@ -560,12 +561,19 @@ function renderModeLine(win) {
   const fmt = getVarOr('mode-line-format', null, buf);
   const el = win.modeLineEl;
   el.classList.toggle('active', win === selected);
-  el.replaceChildren();
+  // Rebuilt only when its text changes (redisplay runs after every command and scroll).
   if (typeof fmt === 'function') {
-    el.textContent = String(fmt(win, buf));
+    const text = String(fmt(win, buf));
+    if (win.modeLineKey !== `custom\0${text}`) {
+      el.textContent = text;
+      win.modeLineKey = `custom\0${text}`;
+    }
     return;
   }
   const m = defaultModeLine(win, buf);
+  const key = `${m.state}\0${m.left}\0${m.right}`;
+  if (win.modeLineKey === key) return;
+  win.modeLineKey = key;
   const tag = document.createElement('span');
   tag.className = `state-tag state-${m.state.replace(/^visual-.*/, 'visual')}`;
   tag.textContent = ` ${STATE_TAGS[m.state] ?? '?'} `;
@@ -575,14 +583,12 @@ function renderModeLine(win) {
   const right = document.createElement('span');
   right.className = 'ml-right';
   right.textContent = m.right;
-  el.append(tag, left, right);
+  el.replaceChildren(tag, left, right);
 }
 
 function renderWindow(win) {
   const buf = win.buffer;
   const isSel = win === selected;
-  // Before the body, so the body is measured with the header already shown or hidden.
-  renderHeaderLine(win);
   // The selected window shows (and owns) the buffer's point.
   const point = isSel ? buf.point.pos : win.point.pos;
   const newPoint = renderView(win, isSel, point);
@@ -601,12 +607,9 @@ function renderHeaderLine(win) {
   const el = win.headerLineEl;
   if (!el) return;
   const text = win.buffer?.headerLine;
-  if (text) {
-    if (el.textContent !== text) el.textContent = text;
-    el.style.display = '';
-  } else {
-    el.style.display = 'none';
-  }
+  if (text && el.textContent !== text) el.textContent = text;
+  const display = text ? '' : 'none';
+  if (el.style.display !== display) el.style.display = display;
 }
 
 function redisplayWindows() {
@@ -624,8 +627,13 @@ function redisplayWindows() {
     }
     layoutDirty = false;
   }
+  const windows = windowList();
+  // Measure every window up front (after header lines, which change their heights), so
+  // the browser lays the page out once here instead of after each window's changes.
+  for (const w of windows) renderHeaderLine(w);
+  for (const w of windows) measureView(w);
   // Render the selected window last so it can position the input element.
-  for (const w of windowList()) if (w !== selected) renderWindow(w);
+  for (const w of windows) if (w !== selected) renderWindow(w);
   if (selected) renderWindow(selected);
   runHooks('post-redisplay-hook', selected);
 }

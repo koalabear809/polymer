@@ -21,14 +21,17 @@ defvar('cursor-in-non-selected-windows', true, { doc: 'Show a hollow cursor in w
 defvar('truncate-lines', true, { doc: 'When false, long lines wrap at the window edge. When true (default), lines extend horizontally and require scrolling.' });
 
 let metrics = null;
-let epoch = 0;                 // bumped to force all windows to re-render their lines
+let epoch = 0;                 // bumped to make all windows recompute their lines (unchanged ones are kept)
 const globalDecorators = [];   // like buffer.decorators, but applied to every buffer
 
 /** Add a decorator for every buffer: (buf, line, lineStart, lineText) => [{ from, to, face, priority }]. */
 export function addGlobalDecorator(fn) { if (!globalDecorators.includes(fn)) globalDecorators.push(fn); }
 export function removeGlobalDecorator(fn) { const i = globalDecorators.indexOf(fn); if (i >= 0) globalDecorators.splice(i, 1); }
 
-/** Re-render every window's lines on the next redisplay (after a global decoration change). */
+/**
+ * Recompute every window's lines on the next redisplay (after a global decoration change).
+ * Only lines whose content changed are rebuilt.
+ */
 export function invalidateAllViews() { epoch++; }
 
 /** { cw, lh }: character width and line height in px. */
@@ -68,20 +71,52 @@ export function createView(win, onScroll) {
   const cursor = document.createElement('div');
   cursor.className = 'cursor';
   body.append(spacer, lines, cursor);
+  // Only scrolls the user makes (wheel, scrollbar) count as user scrolls, which let the
+  // cursor follow the view. The browser also scrolls by itself, e.g. to keep the text in
+  // view still when lines above it are laid out (content-visibility) or the text shrinks.
+  let pointerDown = false;
+  let userInputAt = -Infinity;
+  body.addEventListener('wheel', () => { userInputAt = performance.now(); }, { passive: true });
+  body.addEventListener('pointerdown', () => {
+    pointerDown = true;
+    const up = () => {
+      pointerDown = false;
+      userInputAt = performance.now();
+      document.removeEventListener('pointerup', up);
+      document.removeEventListener('pointercancel', up);
+    };
+    document.addEventListener('pointerup', up);
+    document.addEventListener('pointercancel', up);
+  });
   body.addEventListener('scroll', () => {
     win.scrollTop = body.scrollTop;
     win.scrollLeft = body.scrollLeft;
-    if (!win.programmaticScroll) win.userScrolled = true;
+    const byUser = pointerDown || performance.now() - userInputAt < 500; // smooth scrolling runs on
+    if (!win.programmaticScroll && byUser) win.userScrolled = true;
     win.programmaticScroll = false;
     onScroll();
   });
-  // Wrapped text reflows with the window width: redisplay (cursor, overlays, hooks) on any width change.
   if (typeof ResizeObserver !== 'undefined') {
+    // Redisplay on any size change: wrapped text reflows with the width, and redisplay
+    // measures windows once at the start of a frame, so a scrollbar appearing (which
+    // changes the height) needs another pass, which also brings the cursor back into view.
     let lastW = 0;
+    let lastH = 0;
     new ResizeObserver(() => {
       const w = body.clientWidth;
-      if (w && w !== lastW) { lastW = w; scheduleRedisplay(); }
+      const h = body.clientHeight;
+      if (w && (w !== lastW || h !== lastH)) {
+        lastW = w;
+        lastH = h;
+        win.sizeChanged = true;
+        scheduleRedisplay();
+      }
     }).observe(body);
+    // Wrapped lines off screen are laid out lazily (content-visibility), so the text's
+    // height changes as they come into view; redisplay then to keep the cursor placed.
+    new ResizeObserver(() => {
+      if (lines.classList.contains('wrapped-mode') && lines.offsetHeight !== win.lastContentH) scheduleRedisplay();
+    }).observe(lines);
   }
   Object.assign(win, { bodyEl: body, spacerEl: spacer, linesEl: lines, cursorEl: cursor });
   win.lineEls = new Map(); // line number -> element (visible lines only)
@@ -101,14 +136,9 @@ function gutterPixels(buf) {
   return gutterWidthChars(buf) * viewMetrics().cw + FRINGE;
 }
 
-/** Widest line in cells, accounting for tabs. */
+/** Widest line in cells, accounting for tabs (the text keeps this up to date across edits). */
 function maxColumns(buf, tabWidth) {
-  let m = 0;
-  for (const l of buf.text.lines) {
-    const w = l.includes('\t') ? visualColumn(l, l.length, tabWidth) : l.length;
-    if (w > m) m = w;
-  }
-  return m;
+  return buf.text.maxWidth((l) => (l.includes('\t') ? visualColumn(l, l.length, tabWidth) : l.length), tabWidth);
 }
 
 // ---------------------------------------------------------------------------
@@ -201,9 +231,14 @@ function renderLineText(text, decos, virtual) {
 }
 
 /** Everything a rendered line shows (text, decorations, gutter), without building it. */
-function lineData(buf, line, { gutterChars, gutterPx, numbers, pointLine, hl }) {
+function lineData(buf, line, opts) {
   const text = buf.lineText(line);
   const { decos, virtual, lineFaces, images } = lineDecorations(buf, line, buf.lineStart(line), text);
+  return { line, text, decos, virtual, lineFaces, images, ...lineChrome(line, opts) };
+}
+
+/** The parts of a line that depend on where the cursor is (see patchLine). */
+function lineChrome(line, { gutterChars, gutterPx, numbers, pointLine, hl }) {
   let gutter = '';
   if (gutterChars) {
     let n = line + 1;
@@ -211,35 +246,87 @@ function lineData(buf, line, { gutterChars, gutterPx, numbers, pointLine, hl }) 
     gutter = String(n).padStart(gutterChars - 1);
   }
   const current = line === pointLine;
-  return { line, text, decos, virtual, lineFaces, images, gutter, gutterPx, current, hlLine: !!(hl && current) };
+  return { gutter, gutterPx, current, hlLine: !!(hl && current) };
 }
 
-/** Lines with equal signatures render identically, so an existing element can be kept. */
+/**
+ * Lines with equal signatures have the same content, so an existing element can be kept
+ * (and moved to another line number). The line number and cursor-line highlight aren't
+ * part of it: patchLine updates those in place, so moving the cursor rebuilds nothing.
+ */
 const lineSignature = (d) => JSON.stringify([
-  d.text, d.decos, d.virtual, d.lineFaces, d.images.map((im) => im.src), d.line, d.gutter, d.gutterPx, d.current, d.hlLine,
+  d.text, d.decos, d.virtual, d.lineFaces, d.images.map((im) => im.src),
+  d.images.length ? [d.line, d.gutterPx] : null, // the image block's indent and cache keys use them
 ]);
+
+/** Update the parts of a line element that follow the cursor: line number and highlight. */
+function patchLine(el, d) {
+  const g = el.firstChild;
+  if (el.pmGutter !== d.gutter) { g.textContent = d.gutter; el.pmGutter = d.gutter; }
+  if (el.pmGutterPx !== d.gutterPx) { g.style.width = `${d.gutterPx}px`; el.pmGutterPx = d.gutterPx; }
+  if (el.pmCurrent !== d.current) { g.classList.toggle('current', d.current); el.pmCurrent = d.current; }
+  if (el.pmHl !== d.hlLine) { el.classList.toggle('hl-line', d.hlLine); el.pmHl = d.hlLine; }
+}
 
 function buildLine(d, win, wrapped) {
   const el = document.createElement('div');
   el.className = 'line';
   if (wrapped) el.classList.add('wrapped');
-  if (d.hlLine) el.classList.add('hl-line');
   for (const f of d.lineFaces) el.classList.add(...f.split(/\s+/).filter(Boolean));
   const g = document.createElement('span');
-  g.className = d.current ? 'gutter current' : 'gutter';
-  g.style.width = `${d.gutterPx}px`;
-  if (d.gutter) g.textContent = d.gutter;
+  g.className = 'gutter';
   el.appendChild(g);
   el.appendChild(renderLineText(d.text, d.decos, d.virtual));
   if (wrapped && d.images.length) {
     el.classList.add('has-images');
     el.appendChild(imageBlock(win, d.images, d.gutterPx, d.line));
   }
+  patchLine(el, d);
   return el;
 }
 
-function renderLine(buf, line, opts) {
-  return buildLine(lineData(buf, line, opts), opts.win, opts.wrapped);
+/**
+ * Lines [first, last] of a buffer that doesn't wrap. Elements from the last render are
+ * reused wherever a line's content is unchanged, even if it moved (lines inserted above,
+ * scrolling), so an edit or a scroll only builds the lines that are new.
+ */
+function renderTruncatedLines(win, buf, opts, first, last) {
+  const prev = win.truncRender;
+  const pool = new Map(); // signature -> unused elements with that content, in order
+  if (prev?.buf === buf) {
+    prev.sigs.forEach((sig, i) => {
+      const list = pool.get(sig);
+      if (list) list.push(prev.els[i]);
+      else pool.set(sig, [prev.els[i]]);
+    });
+  }
+  const els = [];
+  const sigs = [];
+  win.lineEls = new Map();
+  for (let i = first; i <= last; i++) {
+    const d = lineData(buf, i, opts);
+    const sig = lineSignature(d);
+    let el = pool.get(sig)?.shift();
+    if (el) patchLine(el, d);
+    else el = buildLine(d, win, false);
+    els.push(el);
+    sigs.push(sig);
+    win.lineEls.set(i, el);
+  }
+  for (const list of pool.values()) for (const el of list) el.remove();
+  // Put the elements in order, moving as few as possible (anything else left goes).
+  const parent = win.linesEl;
+  let cur = parent.firstChild;
+  for (const el of els) {
+    if (el === cur) cur = cur.nextSibling;
+    else parent.insertBefore(el, cur);
+  }
+  while (cur) {
+    const next = cur.nextSibling;
+    cur.remove();
+    cur = next;
+  }
+  win.truncRender = { buf, sigs, els };
 }
 
 /**
@@ -257,7 +344,7 @@ function renderWrappedLines(win, buf, opts) {
     sigs[i] = lineSignature(data[i]);
   }
   const prev = win.wrappedRender;
-  const reusable = prev && prev.buf === buf && prev.epoch === epoch
+  const reusable = prev && prev.buf === buf
     && prev.els.length === win.linesEl.children.length && (!prev.els.length || prev.els[0].parentNode === win.linesEl);
   let els;
   if (!reusable) {
@@ -280,8 +367,10 @@ function renderWrappedLines(win, buf, opts) {
       win.linesEl.insertBefore(frag, anchor);
     }
     els = [...prev.els.slice(0, head), ...fresh, ...prev.els.slice(prev.els.length - tail)];
+    for (let i = 0; i < head; i++) patchLine(els[i], data[i]);
+    for (let i = n - tail; i < n; i++) patchLine(els[i], data[i]);
   }
-  win.wrappedRender = { buf, epoch, sigs, els };
+  win.wrappedRender = { buf, sigs, els };
   win.lineEls = new Map(els.map((el, i) => [i, el]));
 }
 
@@ -449,24 +538,61 @@ export function offsetFromEvent(win, e) {
 // ---------------------------------------------------------------------------
 // Rendering
 
-/** Scroll without the resulting scroll event counting as a user scroll. */
-function setScroll(win, top, left) {
-  const body = win.bodyEl;
-  if (top !== undefined && Math.abs(body.scrollTop - top) >= 1) {
-    win.programmaticScroll = true;
-    body.scrollTop = top;
-  }
-  if (left !== undefined && Math.abs(body.scrollLeft - left) >= 1) {
-    win.programmaticScroll = true;
-    body.scrollLeft = left;
+/**
+ * Read a window's size and scroll position. Redisplay calls this for every window before
+ * it changes anything, so the browser lays the page out once per frame instead of once
+ * for every read that follows a change. Rendering then works from these numbers.
+ */
+export function measureView(win) {
+  const b = win.bodyEl;
+  if (!b) return;
+  win.geom = {
+    viewH: b.clientHeight,
+    viewW: b.clientWidth,
+    scrollTop: b.scrollTop,
+    scrollLeft: b.scrollLeft,
+    rect: b.getBoundingClientRect(),
+    maxTop: Infinity,
+    maxLeft: Infinity,
+  };
+}
+
+/** Set an inline style only if it changed (writes invalidate the browser's layout). */
+function setStyle(el, prop, value) {
+  const cache = (el.pmStyle ??= {});
+  if (cache[prop] !== value) {
+    cache[prop] = value;
+    el.style.setProperty(prop, value);
   }
 }
 
-/**
- * Render `win`. `selected`: whether it's the selected window. `point` is the offset to
- * display the cursor at; returns a (possibly adjusted) point if the user scrolled the
- * cursor out of view.
- */
+/** Forget what setStyle wrote (after styles were changed some other way). */
+function forgetStyles(...els) {
+  for (const el of els) el.pmStyle = null;
+}
+
+/** Scroll without the resulting scroll event counting as a user scroll. */
+function setScroll(win, top, left) {
+  const body = win.bodyEl;
+  const g = win.geom;
+  if (top !== undefined) {
+    top = Math.max(0, Math.min(top, g.maxTop));
+    if (Math.abs(g.scrollTop - top) >= 1) {
+      win.programmaticScroll = true;
+      body.scrollTop = top;
+      g.scrollTop = top;
+    }
+  }
+  if (left !== undefined) {
+    left = Math.max(0, Math.min(left, g.maxLeft));
+    if (Math.abs(g.scrollLeft - left) >= 1) {
+      win.programmaticScroll = true;
+      body.scrollLeft = left;
+      g.scrollLeft = left;
+    }
+  }
+}
+
 /**
  * Buffers that aren't text (images, ...) set `buf.customRenderer(win, el, selected)`:
  * the window hides its text layer and gives the renderer its own element to fill.
@@ -484,6 +610,9 @@ function renderCustom(win, selected) {
   }
   for (const el of [win.spacerEl, win.linesEl, win.cursorEl]) el.style.display = 'none';
   body.style.overflow = 'hidden';
+  forgetStyles(body, win.spacerEl, win.linesEl);
+  win.cursorBox = null;
+  win.scrollInfo = null;
   buf.customRenderer(win, win.customEl, selected);
   win.renderedBuffer = buf;
 }
@@ -494,9 +623,15 @@ function leaveCustom(win) {
   win.customFor = null;
   for (const el of [win.spacerEl, win.linesEl, win.cursorEl]) el.style.display = '';
   win.bodyEl.style.overflow = '';
+  forgetStyles(win.bodyEl, win.spacerEl, win.linesEl);
   win.renderKey = null;
 }
 
+/**
+ * Render `win`. `selected`: whether it's the selected window. `point` is the offset to
+ * display the cursor at; returns a (possibly adjusted) point if the user scrolled the
+ * cursor out of view.
+ */
 export function renderView(win, selected, point) {
   const buf = win.buffer;
   const body = win.bodyEl;
@@ -505,6 +640,8 @@ export function renderView(win, selected, point) {
     return point;
   }
   if (win.customEl) leaveCustom(win);
+  if (!win.geom) measureView(win);
+  const g = win.geom;
   const { cw, lh } = viewMetrics();
   const lineCount = buf.lineCount;
   const tabWidth = getVarOr('tab-width', 4, buf);
@@ -512,31 +649,29 @@ export function renderView(win, selected, point) {
   const gutterChars = gutterWidthChars(buf);
   const gutterPx = gutterPixels(buf);
   const wrapped = !getVarOr('truncate-lines', true, buf);
-  body.style.setProperty('--tab-width', tabWidth);
+  const userScrolled = win.userScrolled;
+  setStyle(body, '--tab-width', String(tabWidth));
 
-  // Content size (recomputed only when the text changes).
-  const sizeKey = `${buf.textVersion}|${tabWidth}`;
-  if (win.maxColsKey !== sizeKey || win.maxColsBuffer !== buf) {
-    win.maxCols = maxColumns(buf, tabWidth);
-    win.maxColsKey = sizeKey;
-    win.maxColsBuffer = buf;
-  }
   const hscroll = !wrapped && getVarOr('auto-hscroll-mode', true, buf);
-  const contentW = hscroll ? gutterPx + (win.maxCols + 2) * cw : 0;
-  body.style.overflowX = (hscroll && !wrapped) ? '' : 'hidden';
-  
-  // Spacer height (will be hidden when wrapping)
-  win.spacerEl.style.height = `${lineCount * lh}px`;
-  win.spacerEl.style.width = `${contentW}px`;
-  win.linesEl.style.minWidth = hscroll ? `max(${contentW}px, 100%)` : '100%';
-  if ((!hscroll || wrapped) && body.scrollLeft) setScroll(win, undefined, 0);
+  const contentW = hscroll ? gutterPx + (maxColumns(buf, tabWidth) + 2) * cw : 0;
+  setStyle(body, 'overflow-x', hscroll ? '' : 'hidden');
+  // Spacer height (hidden when wrapping)
+  setStyle(win.spacerEl, 'height', `${lineCount * lh}px`);
+  setStyle(win.spacerEl, 'width', `${contentW}px`);
+  setStyle(win.linesEl, 'min-width', hscroll ? `max(${contentW}px, 100%)` : '100%');
+  g.maxTop = wrapped ? Infinity : Math.max(0, lineCount * lh - g.viewH);
+  g.maxLeft = hscroll ? Infinity : 0; // wide characters can make lines wider than contentW
+  if (g.scrollTop > g.maxTop) g.scrollTop = g.maxTop; // the text got shorter: the browser clamps too
+  if (!hscroll && g.scrollLeft) setScroll(win, undefined, 0);
 
-  const viewH = body.clientHeight;
+  const viewH = g.viewH;
   const visibleLines = Math.max(1, Math.floor(viewH / lh));
   const margin = Math.max(0, Math.min(getVarOr('scroll-margin', 3), Math.floor((visibleLines - 1) / 2)));
 
   let pos = buf.posAt(point);
-  const pointMoved = win.lastPoint !== point || win.lastTextVersion !== buf.textVersion || win.renderedBuffer !== buf;
+  // (A size change, e.g. a horizontal scrollbar appearing, can also hide the cursor.)
+  const pointMoved = win.lastPoint !== point || win.lastTextVersion !== buf.textVersion || win.renderedBuffer !== buf || !!win.sizeChanged;
+  win.sizeChanged = false;
 
   if (win.renderedBuffer !== buf) setScroll(win, win.scrollTop ?? 0, 0);
 
@@ -546,11 +681,12 @@ export function renderView(win, selected, point) {
     // For non-wrapped lines, use line-based scrolling
     const top = (pos.line - margin) * lh;
     const bottom = (pos.line + 1 + margin) * lh;
-    if (top < body.scrollTop) setScroll(win, Math.max(0, top));
-    else if (bottom > body.scrollTop + viewH) setScroll(win, bottom - viewH);
-  } else if (win.userScrolled) {
-    const first = Math.ceil(body.scrollTop / lh) + (body.scrollTop > 0 ? margin : 0);
-    const last = Math.floor((body.scrollTop + viewH) / lh) - 1 - (body.scrollTop + viewH < lineCount * lh ? margin : 0);
+    if (top < g.scrollTop) setScroll(win, Math.max(0, top));
+    else if (bottom > g.scrollTop + viewH) setScroll(win, bottom - viewH);
+  } else if (userScrolled) {
+    const st = g.scrollTop;
+    const first = Math.ceil(st / lh) + (st > 0 ? margin : 0);
+    const last = Math.floor((st + viewH) / lh) - 1 - (st + viewH < lineCount * lh ? margin : 0);
     let line = pos.line;
     if (line < first) line = first;
     if (line > last) line = last;
@@ -563,215 +699,217 @@ export function renderView(win, selected, point) {
   }
   win.userScrolled = false;
 
-  // Visible line range.
+  // Lines in the DOM.
   let first, last;
   if (wrapped) {
-    // When wrapping, render all lines to avoid positioning issues
-    // For large buffers, this may need optimization, but it's simpler and correct
+    // Wrapped lines have unknown heights, so all of them are in the DOM (lines off screen
+    // skip layout and paint: content-visibility in style.css).
     first = 0;
     last = lineCount - 1;
   } else {
-    first = Math.max(0, Math.floor(body.scrollTop / lh) - 2);
-    last = Math.min(lineCount - 1, Math.ceil((body.scrollTop + viewH) / lh) + 2);
+    // A screen of lines above and below the visible ones, so scrolling within them is
+    // just the browser moving the page; past them, the range moves (keeping elements).
+    // After a jump nothing can be kept, so only the visible lines are built at once and
+    // the rest when the browser is idle.
+    const vFirst = Math.max(0, Math.floor(g.scrollTop / lh));
+    const vLast = Math.min(lineCount - 1, Math.ceil((g.scrollTop + viewH) / lh));
+    const over = visibleLines;
+    const had = win.renderedBuffer === buf && (win.rangeFirst ?? -1) >= 0;
+    first = had ? win.rangeFirst : -1;
+    last = had ? Math.min(win.rangeLast, lineCount - 1) : -1;
+    if (!had || vFirst < first || vLast > last) {
+      const near = had && vFirst <= last + over && vLast >= first - over;
+      const m = near ? over : 2;
+      first = Math.max(0, vFirst - m);
+      last = Math.min(lineCount - 1, vLast + m);
+      if (near) win.growRange = null;
+      else scheduleGrowRange(win);
+    } else if (win.growRange === 'now') {
+      win.growRange = null;
+      first = Math.max(0, vFirst - over);
+      last = Math.min(lineCount - 1, vLast + over);
+    }
+    win.rangeFirst = first;
+    win.rangeLast = last;
   }
-  
+
   const hl = selected && getVarOr('global-hl-line-mode', true, buf);
-  
-  // Apply wrapping mode unconditionally (not inside render-key guard)
-  if (wrapped) {
-    win.linesEl.classList.add('wrapped-mode');
-    win.spacerEl.style.display = 'none';
+
+  win.linesEl.classList.toggle('wrapped-mode', wrapped);
+  setStyle(win.spacerEl, 'display', wrapped ? 'none' : '');
+
+  // What the lines show, and (separately) what depends on the cursor line: when only the
+  // cursor moved to another line, the existing lines are patched and nothing is recomputed.
+  const key = `${epoch}|${buf.version}|${first}|${last}|${gutterChars}|${tabWidth}|${wrapped}`;
+  const chromeKey = `${hl ? pos.line : -1}|${numbers === 'relative' ? pos.line : ''}|${gutterPx}`;
+  const opts = { win, gutterChars, gutterPx, numbers, pointLine: pos.line, hl, wrapped };
+  let patch = null; // run after the cursor is measured, which then needs no new layout
+  if (key === win.renderKey && win.renderedBuffer === buf) {
+    if (chromeKey !== win.chromeKey) {
+      patch = () => {
+        for (const [line, el] of win.lineEls) patchLine(el, lineChrome(line, opts));
+        win.chromeKey = chromeKey;
+      };
+    }
   } else {
-    win.linesEl.classList.remove('wrapped-mode');
-    win.spacerEl.style.display = '';
-  }
-  
-  const key = `${epoch}|${buf.version}|${first}|${last}|${hl ? pos.line : -1}|${numbers === 'relative' ? pos.line : ''}|${gutterChars}|${tabWidth}|${wrapped}`;
-  if (key !== win.renderKey || win.renderedBuffer !== buf) {
-    const opts = { win, gutterChars, gutterPx, numbers, pointLine: pos.line, hl, wrapped };
+    win.chromeKey = chromeKey;
     if (wrapped) {
+      win.truncRender = null;
       renderWrappedLines(win, buf, opts);
+      setStyle(win.linesEl, 'transform', '');
     } else {
       win.wrappedRender = null;
-      const els = [];
-      win.lineEls = new Map();
-      for (let i = first; i <= last; i++) {
-        const el = renderLine(buf, i, opts);
-        win.lineEls.set(i, el);
-        els.push(el);
-      }
-      win.linesEl.replaceChildren(...els);
-    }
-    
-    // Position based on whether we're wrapping
-    if (wrapped) {
-      // For wrapped lines, don't use transform - render all and let browser handle positioning
-      win.linesEl.style.transform = '';
-    } else {
-      win.linesEl.style.transform = `translateY(${first * lh}px)`;
+      renderTruncatedLines(win, buf, opts, first, last);
+      setStyle(win.linesEl, 'transform', `translateY(${first * lh}px)`);
     }
     win.renderKey = key;
   }
 
-  // Cursor.
+  // Wrapped text: the browser has to lay it out before anything can be measured.
+  let contentH = lineCount * lh;
+  if (wrapped) {
+    contentH = win.linesEl.offsetHeight; // not scrollHeight: that includes the cursor where it was
+    g.scrollTop = body.scrollTop;
+    g.scrollLeft = body.scrollLeft;
+    g.maxTop = Math.max(0, contentH - viewH);
+  }
+
+  // Cursor: measure first, then scroll, then write, so nothing is laid out twice.
   const cursor = win.cursorEl;
   const showCursor = (selected || getVarOr('cursor-in-non-selected-windows', true, buf)) && !buf.cursorHidden;
-  cursor.hidden = !showCursor;
+  let cursorVisible = false;
+  win.cursorBox = null;
+  if (cursor.hidden !== !showCursor) cursor.hidden = !showCursor;
   if (showCursor) {
     const lineText = buf.lineText(pos.line);
     const state = selected ? buf.state : 'inactive';
     // A buffer can override the shape (terminals keep a block cursor in insert state).
     const shape = (state !== 'inactive' && buf.cursorShape) || ({ insert: 'bar', replace: 'underline', operator: 'underline', inactive: 'hollow' }[state] ?? 'block');
-    cursor.className = `cursor cursor-${shape} state-${state}`;
-    
-    let cx, cy, w;
-    
-    if (wrapped) {
-      // For wrapped lines, use Range API to get actual cursor position
-      const lineEl = win.lineEls.get(pos.line);
-      if (lineEl && lineEl.isConnected) {
-        const lt = lineEl.querySelector('.lt');
-        if (lt) {
-          // Get DOM position for the cursor column
-          const domPos = domPosition(lt, pos.col);
-          if (domPos) {
-            const range = document.createRange();
-            const bodyRect = body.getBoundingClientRect();
-            
-            if (pos.col < lineText.length) {
-              // Position cursor at the character position
-              // First, get the insertion point at pos.col
-              range.setStart(domPos.node, domPos.offset);
-              range.setEnd(domPos.node, domPos.offset);
-              const insertRect = range.getBoundingClientRect();
-              
-              // Then measure the character to get its width
-              const nextDomPos = domPosition(lt, pos.col + 1);
-              if (nextDomPos) {
-                range.setStart(domPos.node, domPos.offset);
-                range.setEnd(nextDomPos.node, nextDomPos.offset);
-                
-                // Get all rects for the character
-                const rects = range.getClientRects();
-                
-                if (rects.length > 0) {
-                  // When a character wraps, getClientRects() can return multiple rects
-                  // Find the rect with non-zero width (that's where the character actually appears)
-                  let charRect = null;
-                  for (let i = 0; i < rects.length; i++) {
-                    if (rects[i].width > 0) {
-                      charRect = rects[i];
-                      break;
-                    }
-                  }
-                  
-                  // If all rects have zero width (shouldn't happen), use the last one
-                  if (!charRect) charRect = rects[rects.length - 1];
-                  
-                  // The cursor should be where the character actually appears
-                  cx = charRect.left - bodyRect.left + body.scrollLeft;
-                  cy = charRect.top - bodyRect.top + body.scrollTop;
-                  w = charRect.width || cw;
-                } else {
-                  // Fallback
-                  cx = insertRect.left - bodyRect.left + body.scrollLeft;
-                  cy = insertRect.top - bodyRect.top + body.scrollTop;
-                  w = cw;
-                }
-              } else {
-                // Fallback: use insertion point
-                cx = insertRect.left - bodyRect.left + body.scrollLeft;
-                cy = insertRect.top - bodyRect.top + body.scrollTop;
-                w = cw;
-              }
-            } else {
-              // At end of line - use insertion point
-              range.setStart(domPos.node, domPos.offset);
-              range.setEnd(domPos.node, domPos.offset);
-              const rect = range.getBoundingClientRect();
-              cx = rect.left - bodyRect.left + body.scrollLeft;
-              cy = rect.top - bodyRect.top + body.scrollTop;
-              w = cw;
-            }
-          } else if (lt.lastElementChild?.dataset.virtual) {
-            // No real text, only display text (e.g. an agent's empty "❯ " input line): after it.
-            const r = lt.lastElementChild.getBoundingClientRect();
-            const bodyRect = body.getBoundingClientRect();
-            cx = r.right - bodyRect.left + body.scrollLeft;
-            cy = r.top - bodyRect.top + body.scrollTop;
-            w = cw;
-          } else {
-            // Fallback to old method
-            const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
-            cx = gutterPx + geom.x;
-            cy = lineEl.offsetTop;
-            w = geom.w;
-          }
-        } else {
-          // Fallback
-          const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
-          cx = gutterPx + geom.x;
-          cy = lineEl ? lineEl.offsetTop : pos.line * lh;
-          w = geom.w;
-        }
-      } else {
-        // No line element, fallback
-        const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
-        cx = gutterPx + geom.x;
-        cy = pos.line * lh;
-        w = geom.w;
-      }
-    } else {
-      // Normal (non-wrapped) mode
-      const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
-      cx = gutterPx + geom.x;
-      cy = pos.line * lh;
-      w = geom.w;
-    }
-    
-    // Set cursor character - show space for special chars
-    const ch = pos.col < lineText.length ? lineText[pos.col] : ' ';
-    cursor.textContent = (ch === '\t' || ch === '\n' || ch === '\r') ? ' ' : ch;
-    
-    cursor.style.width = `${Math.max(w, 2)}px`;
-    cursor.style.height = `${lh}px`;
-    cursor.style.transform = `translate(${cx}px, ${cy}px)`;
-    cursor.dataset.x = cx;
-    cursor.dataset.y = cy;
+
+    const { cx, cy, w } = wrapped
+      ? wrappedCursorGeometry(win, buf, pos, lineText, tabWidth, gutterPx)
+      : (() => { const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth); return { cx: gutterPx + geom.x, cy: pos.line * lh, w: geom.w }; })();
+    patch?.();
+    patch = null;
 
     // Horizontal scrolling to keep the cursor visible.
     if (pointMoved && hscroll) {
-      const viewW = body.clientWidth;
-      if (cx - gutterPx < body.scrollLeft) setScroll(win, undefined, Math.max(0, cx - gutterPx - 4 * cw));
-      else if (cx + w > body.scrollLeft + viewW) setScroll(win, undefined, cx + w - viewW + 4 * cw);
+      if (cx - gutterPx < g.scrollLeft) setScroll(win, undefined, Math.max(0, cx - gutterPx - 4 * cw));
+      else if (cx + w > g.scrollLeft + g.viewW) setScroll(win, undefined, cx + w - g.viewW + 4 * cw);
     }
-    
-    // Vertical scrolling for wrapped lines (use actual cursor Y position)
-    if (pointMoved && wrapped) {
-      const cursorTop = cy;
-      const cursorBottom = cy + lh;
-      const marginPx = margin * lh;
-      if (cursorTop - marginPx < body.scrollTop) {
-        setScroll(win, Math.max(0, cursorTop - marginPx), undefined);
-      } else if (cursorBottom + marginPx > body.scrollTop + viewH) {
-        setScroll(win, cursorBottom + marginPx - viewH, undefined);
-      }
-    }
-  }
 
+    // Vertical scrolling for wrapped lines (use actual cursor Y position). Also when the
+    // text reflowed (lines above were laid out) under a cursor that was settled in view.
+    if (wrapped) {
+      const marginPx = margin * lh;
+      const want = () => {
+        let t = g.scrollTop;
+        if (cy - marginPx < t) t = cy - marginPx;
+        else if (cy + lh + marginPx > t + viewH) t = cy + lh + marginPx - viewH;
+        return Math.max(0, Math.min(t, g.maxTop));
+      };
+      const reflowed = !userScrolled && win.cursorWasVisible && contentH !== win.lastContentH;
+      if (pointMoved || reflowed) setScroll(win, want(), undefined);
+      cursorVisible = Math.abs(want() - g.scrollTop) < 1;
+    }
+
+    // Set cursor character - show space for special chars
+    const ch = pos.col < lineText.length ? lineText[pos.col] : ' ';
+    const text = (ch === '\t' || ch === '\n' || ch === '\r') ? ' ' : ch;
+    const className = `cursor cursor-${shape} state-${state}`;
+    if (cursor.className !== className) cursor.className = className;
+    if (cursor.textContent !== text) cursor.textContent = text;
+    setStyle(cursor, 'width', `${Math.max(w, 2)}px`);
+    setStyle(cursor, 'height', `${lh}px`);
+    setStyle(cursor, 'transform', `translate(${cx}px, ${cy}px)`);
+    win.cursorBox = { x: cx, y: cy, w: Math.max(w, 2), h: lh };
+  }
+  patch?.();
+
+  win.cursorWasVisible = cursorVisible;
+  win.lastContentH = contentH;
+  win.scrollInfo = { top: g.scrollTop, height: contentH, viewH };
   win.lastPoint = newPoint;
   win.lastTextVersion = buf.textVersion;
   win.renderedBuffer = buf;
   return newPoint;
 }
 
-/** Screen rectangle of the cursor in `win`, for positioning the input element. */
+/** Build the rest of a window's lines (around the visible ones) once the browser is idle. */
+function scheduleGrowRange(win) {
+  if (win.growRange) return;
+  win.growRange = 'pending';
+  const grow = () => {
+    if (win.growRange !== 'pending') return;
+    win.growRange = 'now';
+    scheduleRedisplay();
+  };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(grow, { timeout: 300 });
+  else setTimeout(grow, 50);
+}
+
+/** Cursor position in a wrapped buffer, measured from the laid-out line: { cx, cy, w }. */
+function wrappedCursorGeometry(win, buf, pos, lineText, tabWidth, gutterPx) {
+  const { cw, lh } = viewMetrics();
+  const body = win.bodyEl;
+  const lineEl = win.lineEls.get(pos.line);
+  const fallback = () => {
+    const geom = columnGeometry(win, buf, pos.line, pos.col, tabWidth);
+    return { cx: gutterPx + geom.x, cy: lineEl?.isConnected ? lineEl.offsetTop : pos.line * lh, w: geom.w };
+  };
+  if (!lineEl?.isConnected) return fallback();
+  const lt = lineEl.querySelector('.lt');
+  if (!lt) return fallback();
+  const bodyRect = body.getBoundingClientRect();
+  const at = (rect, w) => ({ cx: rect.left - bodyRect.left + body.scrollLeft, cy: rect.top - bodyRect.top + body.scrollTop, w });
+  const domPos = domPosition(lt, pos.col);
+  if (!domPos) {
+    // No real text, only display text (e.g. an agent's empty "❯ " input line): after it.
+    if (lt.lastElementChild?.dataset.virtual) {
+      const r = lt.lastElementChild.getBoundingClientRect();
+      return at({ left: r.right, top: r.top }, cw);
+    }
+    return fallback();
+  }
+  const range = document.createRange();
+  range.setStart(domPos.node, domPos.offset);
+  range.setEnd(domPos.node, domPos.offset);
+  const insertRect = range.getBoundingClientRect();
+  if (pos.col >= lineText.length) return at(insertRect, cw); // end of line: the insertion point
+  const next = domPosition(lt, pos.col + 1);
+  if (!next) return at(insertRect, cw);
+  range.setEnd(next.node, next.offset);
+  // When a character wraps, getClientRects() can return several rects; the one with a
+  // width is where the character actually appears.
+  const rects = range.getClientRects();
+  if (!rects.length) return at(insertRect, cw);
+  let charRect = null;
+  for (const r of rects) if (r.width > 0) { charRect = r; break; }
+  charRect ??= rects[rects.length - 1];
+  return at(charRect, charRect.width || cw);
+}
+
+/**
+ * Screen rectangle of the cursor in `win`, for positioning the input element. Computed
+ * from this frame's measurements, so it doesn't make the browser lay out the page again.
+ */
 export function cursorClientRect(win) {
-  return win.cursorEl?.getBoundingClientRect() ?? null;
+  const box = win.cursorBox;
+  const g = win.geom;
+  if (!box || !g) return win.cursorEl?.getBoundingClientRect() ?? null;
+  const left = g.rect.left + box.x - g.scrollLeft;
+  const top = g.rect.top + box.y - g.scrollTop;
+  return { left, top, width: box.w, height: box.h, right: left + box.w, bottom: top + box.h };
+}
+
+/** Where a window is scrolled: { top, height, viewH } (px), from its last redisplay. */
+export function viewScrollInfo(win) {
+  return win.scrollInfo ?? null;
 }
 
 /** Number of fully visible lines in a window. */
 export function visibleLineCount(win) {
   const { lh } = viewMetrics();
-  return Math.max(1, Math.floor((win.bodyEl?.clientHeight ?? lh) / lh));
+  // The last redisplay's measurement, if any (reading the DOM could force a layout).
+  return Math.max(1, Math.floor((win.geom?.viewH ?? win.bodyEl?.clientHeight ?? lh) / lh));
 }

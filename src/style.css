@@ -86,6 +86,8 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
   overflow: auto;
   position: relative;
   cursor: text;
+  /* Its size comes from the layout, never its text: changes inside don't relayout the page. */
+  contain: strict;
 }
 .window-body::-webkit-scrollbar { width: 8px; height: 8px; }
 .window-body::-webkit-scrollbar-thumb { background: var(--bg-hl); border-radius: 4px; }
@@ -99,6 +101,7 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
   height: calc(var(--font-size) * var(--line-height));
   line-height: calc(var(--font-size) * var(--line-height));
   white-space: pre;
+  contain: layout style;
 }
 .line.hl-line, .line.hl-line .gutter { background: var(--bg-alt); }
 
@@ -111,6 +114,10 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
   /* At least one row: an empty line has no content to give it height and would vanish. */
   min-height: calc(var(--font-size) * var(--line-height));
   display: flex;
+  /* Every wrapped line is in the DOM; the browser skips laying out and painting the ones
+     off screen, using their last known height (a row until first shown). */
+  content-visibility: auto;
+  contain-intrinsic-height: auto calc(var(--font-size) * var(--line-height));
 }
 .line.wrapped .lt {
   flex: 1;
@@ -236,6 +243,7 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
   white-space: nowrap;
   overflow: hidden;
   flex: none;
+  contain: layout paint style; /* new text doesn't relayout the window above it */
 }
 .mode-line.active { background: var(--bg-hl); color: var(--fg); }
 .ml-left { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }

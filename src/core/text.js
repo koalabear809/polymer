@@ -55,13 +55,21 @@ export class Text {
     }
   }
 
-  /** Line number containing `offset`. */
+  /**
+   * Line number containing `offset`. Line starts are computed only as far as `offset`, so
+   * after an edit a lookup near it doesn't walk the rest of the file.
+   */
   lineAt(offset) {
     offset = this.clamp(offset);
-    this.computeStarts(this.lines.length - 1);
-    const s = this.starts;
+    const { lines, starts: s } = this;
+    let v = this.startsValid;
+    while (v < lines.length && offset > s[v - 1] + lines[v - 1].length) {
+      s[v] = s[v - 1] + lines[v - 1].length + 1;
+      v++;
+    }
+    this.startsValid = v;
     let lo = 0;
-    let hi = this.lines.length - 1;
+    let hi = v - 1;
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1;
       if (s[mid] <= offset) lo = mid;
@@ -115,6 +123,7 @@ export class Text {
     const before = cur.slice(0, col);
     const after = cur.slice(col);
     const parts = str.split('\n');
+    const widest = this.widestAmong(line, line);
     if (parts.length === 1) {
       this.lines[line] = before + str + after;
     } else {
@@ -122,6 +131,7 @@ export class Text {
       parts[parts.length - 1] += after;
       this.lines = replaceLines(this.lines, line, 1, parts);
     }
+    this.updateWidth(widest, line, line + parts.length - 1);
     this.len += str.length;
     this.invalidate(line);
   }
@@ -135,16 +145,47 @@ export class Text {
     const a = this.posAt(from);
     const b = this.posAt(to);
     const joined = this.lines[a.line].slice(0, a.col) + this.lines[b.line].slice(b.col);
+    const widest = this.widestAmong(a.line, b.line);
     this.lines = replaceLines(this.lines, a.line, b.line - a.line + 1, [joined]);
+    this.updateWidth(widest, a.line, a.line);
     this.len -= to - from;
     this.invalidate(a.line);
     return removed;
   }
 
-  /** Length of the longest line (used for horizontal scrolling). */
-  maxLineLength() {
+  /**
+   * Width of the widest line, as measured by `widthOf(line)` (horizontal scrolling needs it
+   * on every redisplay). It's kept up to date across edits, so the file is only rescanned
+   * when the widest line gets narrower. `key` identifies the measure (e.g. the tab width).
+   */
+  maxWidth(widthOf, key) {
+    const c = this.widthCache;
+    if (c && c.key === key && c.value !== null) return c.value;
     let m = 0;
-    for (const l of this.lines) if (l.length > m) m = l.length;
+    for (const l of this.lines) {
+      const w = widthOf(l);
+      if (w > m) m = w;
+    }
+    this.widthCache = { key, widthOf, value: m };
     return m;
+  }
+
+  /** Before lines [from, to] are replaced: whether one of them is (one of) the widest. */
+  widestAmong(from, to) {
+    const c = this.widthCache;
+    if (!c || c.value === null) return false;
+    if (to - from > 1000) return true; // a big change: rescan later rather than measure every line now
+    for (let i = from; i <= to; i++) if (c.widthOf(this.lines[i]) >= c.value) return true;
+    return false;
+  }
+
+  /** After lines were replaced by lines [from, to]; `hadWidest` is from widestAmong(). */
+  updateWidth(hadWidest, from, to) {
+    const c = this.widthCache;
+    if (!c || c.value === null) return;
+    let m = 0;
+    for (let i = from; i <= to; i++) m = Math.max(m, c.widthOf(this.lines[i]));
+    if (m >= c.value) c.value = m;
+    else if (hadWidest) c.value = null; // the widest line got narrower: rescan when asked
   }
 }

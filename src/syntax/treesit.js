@@ -152,8 +152,7 @@ function attach(b) {
     tree: null,
     dirty: true,
     version: 0,
-    cache: new Map(),
-    cacheVersion: -1,
+    cache: new Map(), // line -> highlights; edits and reparses drop only the lines they affect
     pending: null,
   };
   state.decorator = (buf, line) => lineHighlights(state, buf, line);
@@ -190,6 +189,12 @@ export function ensureTree(b) {
   if (s.dirty || !s.tree) {
     const old = s.tree;
     s.tree = s.parser.parse(inputFor(b), old ?? undefined);
+    if (!old) s.cache.clear();
+    else if (s.tree) {
+      // Lines whose syntax changed (e.g. everything after a newly opened string) need new
+      // highlights; the edited lines themselves were dropped when the edit happened.
+      for (const r of old.getChangedRanges(s.tree)) dropRows(s, r.startPosition.row, r.endPosition.row);
+    }
     old?.delete();
     s.dirty = false;
     s.version++;
@@ -211,13 +216,39 @@ addHook('before-change-functions', function treesitBeforeChange(b, from, to) {
 addHook('after-change-functions', function treesitAfterChange(b, from, to) {
   const s = b.treesit;
   if (!s) return;
+  const z = b.text.posAt(to);
   if (s.tree && s.pending) {
-    const z = b.text.posAt(to);
     s.tree.edit({ ...s.pending, newEndIndex: to, newEndPosition: { row: z.line, column: z.col } });
   }
+  if (s.pending) shiftRows(s, s.pending.startPosition.row, s.pending.oldEndPosition.row, z.line);
+  else s.cache.clear();
   s.pending = null;
   s.dirty = true;
 });
+
+/** Forget cached highlights for lines [from, to]. */
+function dropRows(s, from, to) {
+  if (to - from > s.cache.size) {
+    for (const row of s.cache.keys()) if (row >= from && row <= to) s.cache.delete(row);
+  } else {
+    for (let row = from; row <= to; row++) s.cache.delete(row);
+  }
+}
+
+/**
+ * After lines [start, oldEnd] were replaced by lines [start, newEnd]: drop their cached
+ * highlights and renumber the ones below.
+ */
+function shiftRows(s, start, oldEnd, newEnd) {
+  const delta = newEnd - oldEnd;
+  if (!delta) { dropRows(s, start, newEnd); return; }
+  const next = new Map();
+  for (const [row, decos] of s.cache) {
+    if (row < start) next.set(row, decos);
+    else if (row > oldEnd) next.set(row + delta, decos);
+  }
+  s.cache = next;
+}
 
 // ---------------------------------------------------------------------------
 // Highlighting
@@ -240,10 +271,6 @@ function lineHighlights(state, b, line) {
   if (!state.query || !getVarOr('treesit-font-lock', true, b)) return [];
   const tree = ensureTree(b);
   if (!tree) return [];
-  if (state.cacheVersion !== state.version) {
-    state.cache.clear();
-    state.cacheVersion = state.version;
-  }
   if (!state.cache.has(line)) computeChunk(state, b, tree, line);
   return state.cache.get(line) ?? [];
 }
@@ -257,7 +284,9 @@ const MAX_COLS = 5000; // don't paint absurdly long (minified) lines
  * after).
  */
 function computeChunk(state, b, tree, start) {
-  const end = Math.min(b.lineCount, start + getVarOr('treesit-highlight-chunk', 150, b));
+  const limit = Math.min(b.lineCount, start + getVarOr('treesit-highlight-chunk', 150, b));
+  let end = start + 1;
+  while (end < limit && !state.cache.has(end)) end++; // stop at lines that are still highlighted
   const caps = state.query.captures(tree.rootNode, {
     startPosition: { row: start, column: 0 },
     endPosition: { row: end, column: 0 },

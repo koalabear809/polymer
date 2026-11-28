@@ -13,7 +13,7 @@ import { selectedWindow } from './window.js';
 import { setFocusTarget, focusInput } from './focus.js';
 import { onRedisplay } from './redisplay.js';
 import { helmActive } from './helm/helm.js';
-import { viewMetrics } from './view.js';
+import { viewMetrics, cursorClientRect } from './view.js';
 import { defcommand } from './registry.js';
 import { readClipboardText, readClipboardImage, imageFromBlob } from './clipboard.js';
 
@@ -79,12 +79,20 @@ function positionInput() {
   const win = selectedWindow();
   const cursor = win?.cursorEl;
   if (!cursor || cursor.hidden) return;
-  const r = cursor.getBoundingClientRect();
-  const frame = ta.offsetParent?.getBoundingClientRect() ?? { left: 0, top: 0 };
-  ta.style.left = `${r.left - frame.left}px`;
-  ta.style.top = `${r.top - frame.top}px`;
-  ta.style.height = `${viewMetrics().lh}px`;
+  // Both rectangles come from measurements already made, so this doesn't lay out the page.
+  const r = cursorClientRect(win);
+  if (!r) return;
+  frameOrigin ??= ta.offsetParent?.getBoundingClientRect() ?? { left: 0, top: 0 };
+  const left = `${r.left - frameOrigin.left}px`;
+  const top = `${r.top - frameOrigin.top}px`;
+  const height = `${viewMetrics().lh}px`;
+  if (ta.style.left !== left) ta.style.left = left;
+  if (ta.style.top !== top) ta.style.top = top;
+  if (ta.style.height !== height) ta.style.height = height;
 }
+
+let frameOrigin = null; // where the input's positioning parent is (it only moves on resize)
+window.addEventListener('resize', () => { frameOrigin = null; });
 
 export function attachInput(el) {
   ta = el;

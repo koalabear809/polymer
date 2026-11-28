@@ -176,8 +176,9 @@ function setupBuffer(b, id) {
 
 function windowGrid(win) {
   const { cw } = viewMetrics();
+  // After a redisplay, use the size it measured (reading the DOM then would lay out the page again).
   const rows = Math.max(2, visibleLineCount(win));
-  const cols = Math.max(10, Math.floor((win.bodyEl.clientWidth - 8) / cw) - 1);
+  const cols = Math.max(10, Math.floor(((win.geom?.viewW ?? win.bodyEl.clientWidth) - 8) / cw) - 1);
   return { rows, cols };
 }
 
