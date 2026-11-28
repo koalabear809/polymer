@@ -24,7 +24,9 @@ import { expandFileName, abbreviateFileName } from '../core/files.js';
 import { addAgentMcpProvider } from '../agent/agent.js';
 
 defvar('mcp-server-enabled', true, { doc: 'Run the editor\'s MCP server and give it to agents.' });
-defvar('mcp-allow-eval', 'ask', { doc: 'The eval_js tool: "ask" (confirm each time), true (allow), or false (disabled).' });
+defvar('mcp-allow-eval', 'ask', {
+  doc: 'The eval_js tool: "ask" (confirm each time), true (allow without asking; agent sessions also skip their permission prompt for it), or false (disabled).',
+});
 defvar('mcp-allow-all-commands', false, { doc: 'When true, run_command may run any interactive command, not only allowed ones.' });
 defvar('mcp-commands', ['save-buffer', 'git-status', 'git-refresh', 'split-window-right', 'split-window-below', 'delete-other-windows', 'balance-windows'], {
   doc: 'Commands agents may run with run_command, besides those defined with { mcp: true }.',

@@ -613,6 +613,12 @@ async function requestPermission(b, params) {
   const tool = b.agent.items.find((x) => x.type === 'tool' && x.id === toolCall?.toolCallId);
   if (tool && toolCall) Object.assign(tool, Object.fromEntries(Object.entries(toolCall).filter(([, v]) => v !== undefined && v !== null)));
   scheduleRedraw(b);
+  // With mcp-allow-eval set to true, the editor's own eval_js tool needs no confirmation.
+  // (Claude Code titles MCP tool calls with the tool's full name.)
+  if ((toolCall?.title ?? tool?.title) === 'mcp__polymer__eval_js' && getVarOr('mcp-allow-eval', 'ask') === true) {
+    const allow = options.find((o) => o.kind === 'allow_once') ?? options.find((o) => o.kind === 'allow_always');
+    if (allow) return { outcome: { outcome: 'selected', optionId: allow.optionId } };
+  }
   const label = { allow_once: 'Allow', allow_always: 'Always allow', reject_once: 'Reject', reject_always: 'Always reject' };
   try {
     const optionId = await completingRead(`${b.agent.label} wants to: ${title} — `, options.map((o) => ({
