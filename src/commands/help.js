@@ -34,9 +34,36 @@ function bindingsText(name) {
   return `It is bound to:\n${items.join('\n')}`;
 }
 
+/** Functions on the scripting API (the `polymer` global) that aren't registry functions. */
+function apiFunctionNames() {
+  const api = globalThis.polymer ?? {};
+  return Object.keys(api).filter((n) => typeof api[n] === 'function' && !functionInfo(n));
+}
+
+/** Candidates for describe-function: registry functions plus API functions. */
+function functionCandidates(pred) {
+  const reg = allFunctions(pred).map((f) => ({ label: f.name, value: f.name, annotation: firstLine(f.doc) }));
+  const api = apiFunctionNames().map((n) => ({ label: n, value: n, annotation: 'API function' }));
+  return [...reg, ...api].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function describeApiFunctionText(name, fn) {
+  return [
+    `${name} is a Polymer API function (also polymer.${name}).`,
+    '',
+    'Call it from init.js, packages or eval-expression. Source:',
+    '',
+    fn.toString(),
+  ].join('\n');
+}
+
 export function describeFunctionText(name) {
   const f = functionInfo(name);
-  if (!f) return `${name} is not defined.`;
+  if (!f) {
+    const fn = globalThis.polymer?.[name];
+    if (typeof fn === 'function') return describeApiFunctionText(name, fn);
+    return `${name} is not defined.`;
+  }
   const lines = [];
   lines.push(`${name} is ${f.command ? 'an interactive command' : 'a function'}.`);
   lines.push('');
@@ -73,10 +100,9 @@ export function describeVariableText(name, buf = currentBuffer()) {
 }
 
 defcommand('describe-function', {
-  doc: 'Show the documentation, key bindings and source of a function.',
+  doc: 'Show the documentation, key bindings and source of a function, including Polymer API functions.',
   interactive: async () => [await completingRead('Describe function: ',
-    allFunctions().map((f) => ({ label: f.name, value: f.name, annotation: firstLine(f.doc) }))
-      .sort((a, b) => a.label.localeCompare(b.label)),
+    functionCandidates(),
     { history: 'describe-function-history', preview: (n) => showHelp(describeFunctionText(n)) })],
 }, (name) => showHelp(describeFunctionText(name)));
 
